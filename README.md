@@ -129,6 +129,52 @@ As in Nuke, the blurs see the source (and the Area input) with their edge pixels
 
 ---
 
+## Performance
+
+Render time per frame, CPU vs GPU, measured with `ofx_bench` (best of 5 runs). GPU times include the host ↔ GPU transfers, as in Nuke. CPU and GPU renders are identical in every test.
+
+**Test configuration**
+
+| | |
+|---|---|
+| CPU | Intel Xeon X5675 @ 3.07 GHz, 6 cores / 12 threads (Westmere, no AVX2: plug-ins built without AVX2) |
+| RAM | 96 GB DDR3 |
+| GPU | NVIDIA GeForce RTX 3060 Ti, 8 GB |
+| GPU link | PCI Express 2.0, about 6 GB/s host ↔ GPU (page-locked memory) |
+| System | Windows, Visual Studio 2026, CUDA Toolkit 13 |
+
+**HD (1920×1080)**
+
+| Test | CPU | GPU | GPU speed-up |
+|---|---|---|---|
+| push_IT Interpolate | 72 ms | 21.5 ms | ×3.4 |
+| push_IT Stretch | 80 ms | 27.6 ms | ×2.9 |
+| push_IT Stretch + Max Distance + Spread Blur 50 | 136 ms | 29.2 ms | ×4.7 |
+| push_IT Vector Warp 300 px | 149 ms | 25.9 ms | ×5.8 |
+| push_IT Contract (Edge Shrink 5, Edge Softness 5) | 129 ms | 28.0 ms | ×4.6 |
+| push_IT Interpolate + Spread Blur 500 | 148 ms | 28.4 ms | ×5.2 |
+| expo_GLOW Max Size 2000, gaussian, 10 steps | 156 ms | 27.5 ms | ×5.7 |
+| expo_GLOW Max Size 2000, box, 10 steps | 104 ms | 24.3 ms | ×4.3 |
+| expo_GLOW Max Size 300, gaussian, 20 steps | 376 ms | 33.7 ms | ×11.2 |
+
+**UHD (3840×2160)**
+
+| Test | CPU | GPU | GPU speed-up |
+|---|---|---|---|
+| push_IT Interpolate | 250 ms | 82.3 ms | ×3.0 |
+| push_IT Stretch | 251 ms | 89.3 ms | ×2.8 |
+| push_IT Stretch + Max Distance + Spread Blur 50 | 496 ms | 103.6 ms | ×4.8 |
+| push_IT Vector Warp 300 px | 490 ms | 93.0 ms | ×5.3 |
+| push_IT Contract (Edge Shrink 5, Edge Softness 5) | 338 ms | 94.7 ms | ×3.6 |
+| push_IT Interpolate + Spread Blur 500 | 491 ms | 98.2 ms | ×5.0 |
+| expo_GLOW Max Size 2000, gaussian, 10 steps | 732 ms | 99.0 ms | ×7.4 |
+| expo_GLOW Max Size 2000, box, 10 steps | 389 ms | 96.9 ms | ×4.0 |
+| expo_GLOW Max Size 300, gaussian, 20 steps | 2024 ms | 124.6 ms | ×16.2 |
+
+The GPU is 3 to 16 times faster than the CPU. The gain grows with the cost of the settings (large blurs, Vector Warp, many glow steps), because most of the GPU time is spent moving the image to and from the graphics card: 70 to 80 % in these tests. This test machine is a 2010-era workstation with PCI Express 2.0: on a recent PC (PCI Express 4.0 or newer, DDR4 / DDR5) the transfers are much faster, so the GPU times should be lower and the speed-ups higher.
+
+---
+
 ## Requirements
 
 | | Windows 10 / 11 (x64) | Linux (Mint 22 / Ubuntu 24.04, x86-64) | macOS 11+ |
