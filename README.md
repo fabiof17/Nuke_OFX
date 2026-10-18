@@ -1,18 +1,22 @@
-# Nuke OFX plug-ins: push_IT_OFX and expo_GLOW_OFX
+# Nuke OFX Plug-ins
 
-Two OpenFX plug-ins for The Foundry Nuke, written in C++ with optional NVIDIA CUDA acceleration:
+A collection of OpenFX plug-ins for The Foundry Nuke, written in C++ with optional NVIDIA CUDA acceleration.
 
 | Plug-in | What it does |
 |---|---|
-| **push_IT_OFX** | Edge extend / pixel spread: pushes the colours of a matte outward, or fills a matted area from its surroundings. |
-| **expo_GLOW_OFX** | Exponential glow: a sum of blurs whose sizes grow geometrically, for a soft and wide light falloff. |
+| [**push_IT_OFX**](#push_it_ofx) | Edge extend / pixel spread: pushes the colours of a matte outward, or fills a matted area from its surroundings. |
+| [**expo_GLOW_OFX**](#expo_glow_ofx) | Exponential glow: a sum of blurs whose sizes grow geometrically, for a soft and wide light falloff. |
 
-Both plug-ins run on Windows, Linux and macOS. On Windows and Linux they can render on an NVIDIA GPU with CUDA; when no GPU is available they fall back to a multithreaded CPU renderer automatically. The CPU and GPU renders are identical.
+The plug-ins run on Windows, Linux and macOS. On Windows and Linux they can render on an NVIDIA GPU with CUDA; when no GPU is available they fall back to a multithreaded CPU renderer automatically. The CPU and GPU renders are identical.
+
+Ready-to-use builds for Windows and Linux are available on the [Releases](../../releases) page.
+
+Each plug-in lives in its own folder and is built on its own:
 
 ```
 push_IT_OFX/      edge extend plug-in (sources, CMakeLists.txt, build.bat, build.sh)
 expo_GLOW_OFX/    glow plug-in (sources, CMakeLists.txt, build.bat, build.sh)
-ofx_bench/        optional stand-alone CPU / GPU benchmark of both plug-ins (no Nuke needed)
+ofx_bench/        optional stand-alone CPU / GPU benchmark (no Nuke needed)
 ```
 
 ---
@@ -144,7 +148,7 @@ Notes:
 
 ## Building
 
-Each plug-in is built on its own, from its folder. The commands below use `push_IT_OFX`; replace it with `expo_GLOW_OFX` for the glow.
+Each plug-in is built on its own, from its folder. The commands below use `push_IT_OFX` as an example; replace it with the folder of the plug-in you want to build (e.g. `expo_GLOW_OFX`).
 
 ### Windows
 
@@ -181,7 +185,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPUSHIT_WITH_CUDA=OFF \
 cmake --build build -j$(sysctl -n hw.ncpu)
 ```
 
-For expo_GLOW_OFX, use `-DEXPOGLOW_WITH_CUDA=OFF`.
+Each plug-in has its own CUDA option name, e.g. `-DEXPOGLOW_WITH_CUDA=OFF` for expo_GLOW_OFX (see the table below).
 
 ### Manual CMake build and options
 
@@ -211,15 +215,15 @@ Copy the `.ofx.bundle` folder into the OFX plug-in folder of your system:
 
 You can also put the bundles in any folder and add that folder to the `OFX_PLUGIN_PATH` environment variable.
 
-The nodes appear under **Filter > push_IT_OFX** and **Filter > expo_GLOW_OFX**, or with Tab.
+The nodes appear in the **Filter** menu (e.g. **Filter > push_IT_OFX**), or with Tab.
 
 **After an installation or an update, clear Nuke's OFX cache** (close Nuke first). Otherwise Nuke may keep showing the old version or not show the node at all:
 - Windows: delete `%LOCALAPPDATA%\Temp\nuke\ofxplugincache`
 - Linux / macOS: delete the `ofxplugincache` folder in Nuke's temporary directory (`NUKE_TEMP_DIR`, `/var/tmp/nuke` by default on Linux)
 
-**Node colour**: OFX plug-ins cannot set their own colour in the Node Graph. Add a rule in *Preferences > Panels > Node Colors* with the node name (`push_IT_OFX`, `expo_GLOW_OFX`).
+**Node colour**: OFX plug-ins cannot set their own colour in the Node Graph. Add a rule in *Preferences > Panels > Node Colors* with the node name (e.g. `push_IT_OFX`).
 
-**Channels**: Nuke only passes the rgba layer to OFX plug-ins, so both effects work on rgba. Use a Shuffle before the node to process another layer.
+**Channels**: Nuke only passes the rgba layer to OFX plug-ins, so the effects work on rgba. Use a Shuffle before the node to process another layer.
 
 ---
 
