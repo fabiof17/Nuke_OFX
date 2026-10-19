@@ -6,6 +6,8 @@ A collection of OpenFX plug-ins for The Foundry Nuke, written in C++ with option
 |---|---|
 | [**push_IT_OFX**](#push_it_ofx) | Edge extend / pixel spread: pushes the colours of a matte outward, or fills a matted area from its surroundings. |
 | [**expo_GLOW_OFX**](#expo_glow_ofx) | Exponential glow: a sum of blurs whose sizes grow geometrically, for a soft and wide light falloff. |
+| [**L_Despill_OFX**](#l_despill_ofx) | Spill suppression for green, blue and red screens, with spill matte processing, spill replace and background re-light. |
+| [**despill_IT_OFX**](#despill_it_ofx) | Spatially aware despill: local screen colour, despill fading from the edges inwards, protected hues, edge colour rebuilt from the subject, background light and light wrap. |
 
 The plug-ins run on Windows, Linux and macOS. On Windows and Linux they can render on an NVIDIA GPU with CUDA; when no GPU is available they fall back to a multithreaded CPU renderer automatically. The CPU and GPU renders are identical.
 
@@ -16,6 +18,8 @@ Each plug-in lives in its own folder and is built on its own:
 ```
 push_IT_OFX/      edge extend plug-in (sources, CMakeLists.txt, build.bat, build.sh)
 expo_GLOW_OFX/    glow plug-in (sources, CMakeLists.txt, build.bat, build.sh)
+L_Despill_OFX/    classic despill plug-in (sources, CMakeLists.txt, build.bat, build.sh)
+despill_IT_OFX/   spatially aware despill plug-in (sources, CMakeLists.txt, build.bat, build.sh)
 ofx_bench/        optional stand-alone CPU / GPU benchmark (no Nuke needed)
 ```
 
@@ -129,9 +133,152 @@ As in Nuke, the blurs see the source (and the Area input) with their edge pixels
 
 ---
 
+## L_Despill_OFX
+
+Spill suppression for keying. The screen channel is limited by a mix of the two other channels; the amount of spill removed gives a **spill matte**, which can be filtered and then drives a grade of the despilled area, a grade of the foreground and the re-light of the edges with a background.
+
+It brings together the features of two widely used gizmos, **L_Despill v05** (Luma Pictures) and **DespillMadness**, with their inconsistencies fixed (see below).
+
+### Inputs
+
+| Input | Role |
+|---|---|
+| **Source** | Plate to despill. |
+| **BG** | Optional. Background used to re-light the despilled edges. |
+| **Mask** | Optional. Limits the effect. |
+
+### Parameters
+
+**GPU** (first line of the panel)
+- **Use GPU**: renders on the NVIDIA GPU. The detected card is shown on the right.
+
+**Despill**
+- **Screen Color**: Green, Blue or Red.
+- **Despill Math**
+  - **Average**: the screen channel is limited by a weighted average of the two other channels.
+  - **Max**: limited by the larger of the two other channels (gentler on colours close to the screen).
+- **Bias**: weight between the two other channels. For a green screen, −1 = red limits green, +1 = blue limits green, 0 = equal weights, −0.33 = double red average (2R + B) / 3.
+- **Limit Scale**: multiplies the limit. Below 1: stronger despill; above 1: lighter.
+- **Math Colorspace**: Log (Cineon) or Linear. The image stays linear in and out.
+- **Balance White** / **Balance Black**: white and black point of the screen channel before the despill, reverted afterwards. Use them when the whole plate has a cast of the screen colour.
+- **Restore Luminance**: adds back the luminance removed with the spill, so that despilled areas do not get darker.
+
+**Spill matte**
+- **Matte Colorspace**: Linear (default), Log, or the same as the despill.
+- **Matte Blackpoint** / **Whitepoint** / **Gamma**: grade of the spill matte.
+- **Median Size**: median filter radius, removes noise and grain (up to 10 px).
+- **Clean Size**: positive values fill small holes (dilate then erode); negative values remove small specks (erode then dilate).
+- **Matte Blur**: blur of the spill matte.
+
+**Spill replace**: grade (blackpoint, whitepoint, lift, gain, multiply, offset, gamma) and saturation of the despilled area, inside the spill matte, in Log or Linear.
+
+**FG grade**: the same grade and saturation, applied to the foreground outside the spill matte.
+
+**Background** (BG input)
+- **BG Mode**
+  - **Add**: the graded BG is multiplied by the spill matte and added, re-lighting the edges with the background.
+  - **Keymix**: the BG replaces the despilled image inside the spill matte.
+  - **Off**: the BG input is ignored.
+- **BG Colorspace**, **BG Blackpoint** / **Whitepoint** / **Gamma** / **Saturation**, **BG Black Clamp** / **White Clamp**: grade of the BG for the Add mode.
+
+**Output**
+- **Alpha Output**: source alpha, or the spill matte.
+- **Invert Mask**, **Mix**.
+
+The spill matte filters see the source with its edge pixels repeated beyond the bounding box, as Nuke's filters do, so the matte does not fade at the image borders.
+
+### Differences from the original gizmos
+
+- **Despill maths unified**: the 10 formulas of the two gizmos are covered by *Average* / *Max* with *Bias* and *Limit Scale*. In L_Despill, *Fine Tune* changed meaning from one mode to the next (channel weighting or limit scale); here each setting does one thing.
+- **Same formula for the colour and the matte**: in DespillMadness the double-average modes removed one amount of spill from the colour but wrote another one into the matte, and the blue-screen version divided by 2 instead of 3.
+- **No limit on the spill removed**: L_Despill clamped the spill to 1 in its Average and Max modes, which left very strong spill partly untouched.
+- **Exact channels**: only the screen channel is modified. L_Despill converted all channels to log and back, adding rounding errors to the other two.
+- **Restore luminance** (from DespillMadness) no longer clips at 1, so it works on HDR plates.
+- **Log conversion protected** against negative values, which produced invalid pixels (NaN).
+- **BG Add does nothing without a BG input**. In L_Despill, the default BG grade applied to an empty input darkened the despilled areas.
+- **Spill matte clean**: L_Despill's *AlphaClean* group is replaced by a standard morphological clean (fill holes / remove specks).
+- **Spill matte in Linear by default**: a matte measured in log space is very weak, so the spill replace grade barely acted.
+
+---
+
+## despill_IT_OFX
+
+A spatially aware despill. A classic despill (such as L_Despill_OFX) treats every pixel on its own, with one screen colour for the whole image. As a result, it also removes wanted colours (green eyes, teal clothes, olive skin) and turns semi-transparent edges grey. despill_IT_OFX uses the image around each pixel:
+
+- **Local screen**: the spill is measured against the screen colour *around* the pixel, estimated from the screen areas of the plate and interpolated behind the subject, or read from a clean plate. Uneven screens are handled.
+- **Spatial strength**: the despill is full near the screen and fades towards the inside of the subject, using the exact distance of every pixel to the screen.
+- **Protection**: a hue range (skin, eyes...) and/or a Protect matte are left untouched.
+- **Edge colour**: the colour of semi-transparent edges (hair, motion blur) is rebuilt from the opaque core of the subject, propagated outwards, keeping the luminance of the edge. Hair stays blond instead of turning grey.
+- **Spill light and light wrap**: the screen light removed with the spill can be replaced by the light of the blurred background, and the blurred background can be wrapped on the inner edges of the subject.
+
+### Inputs
+
+| Input | Role |
+|---|---|
+| **Source** | Plate to despill. |
+| **Key** | Optional. Alpha of a keyer (1 = subject). Without it, an internal key is computed from the amount of screen in each pixel. |
+| **CleanPlate** | Optional. Plate of the empty screen, used as the local screen colour. |
+| **BG** | Optional. Background for the spill light and the light wrap. |
+| **Protect** | Optional. Matte of areas to leave untouched. |
+| **Mask** | Optional. Limits the effect. |
+
+### Parameters
+
+**GPU** (first line of the panel)
+- **Use GPU**: renders on the NVIDIA GPU. The detected card is shown on the right.
+
+**Screen**
+- **Screen Color**: colour of the screen, picked on an evenly lit part of it. Its largest component gives the screen channel (green, blue or red).
+- **Screen Source**: Global Color (the Screen Color everywhere), From Plate (local estimate, default) or Clean Plate.
+- **Despill Math** (Average / Max), **Bias**, **Limit Scale**: how the spill is detected, as in L_Despill_OFX.
+
+**Key**
+- **Key Source**: Auto (the Key input when connected, otherwise the internal key) or Internal.
+- **Key Low** / **Key High**: internal key, fraction of screen at which a pixel becomes partly, then fully, screen.
+- **Screen Below** / **Core Above**: key values that define the screen (used for the local screen and the distances) and the opaque core (whose colour is propagated into the edges).
+
+**Strength**
+- **Strength**: overall despill amount.
+- **Spatial**, **Edge Width**, **Edge Falloff**, **Interior Strength**: full despill up to *Edge Width* pixels from the screen, then a fade over *Edge Falloff* pixels down to *Interior Strength*, which is the amount kept for spill reflected deep inside the subject.
+
+**Protection**
+- **Protect Hue**, **Protect Range**, **Protect Softness**: hue range to protect, in degrees (30 = skin; range 0 = off).
+- **Protect Amount**: strength of the protection, from the protected hues and the Protect input.
+
+**Despill**
+- **Despill Mode**
+  - **Screen Channel** (default): the screen channel is limited by the two others, the classic despill but relative to the local screen.
+  - **Neutralize**: the screen colour becomes neutral light of the same luminance.
+  - **Subtract Screen**: the screen light is removed. This is physically right for reflected spill. Edges get darker, as in a premultiplied foreground, so combine it with *Spill Light = Background*.
+- **Edge Restore**: amount of the edge colour rebuilt from the opaque core.
+
+**Background** (BG input)
+- **Spill Light**: None, or Background (the removed screen light is replaced by the blurred BG light).
+- **BG Gain**, **BG Blur**: level and blur of the BG light.
+- **Light Wrap**: adds the blurred BG on the inner edges of the subject.
+
+**Output**
+- **Output**: the result, or a view to set up the effect (spill map, despill strength, key, local screen, propagated core colour).
+- **Alpha Output** (source alpha, key, spill map), **Invert Mask**, **Mix**.
+
+### Compared with a classic despill
+
+Measured on a synthetic plate: an uneven green screen, a subject with skin, blond hair with soft edges, green spill reflected near the edges, and a teal shirt. The figures are the mean error against the true colours (lower is better), with default settings.
+
+| Area | No despill | Classic despill (L_Despill_OFX, linear average) | despill_IT_OFX |
+|---|---|---|---|
+| Teal shirt | 0.000 | 0.067 | 0.015 (0.000 with *Protect Hue*) |
+| Blond hair | 0.001 | 0.024 | 0.004 |
+| Semi-transparent edges (colour) | 0.297 | 0.138 | 0.087 |
+| Spill reflected near the edges | 0.021 | 0.024 | 0.022 |
+
+Like every despill that compares colour channels, it detects reflected spill poorly on colours that naturally lack the screen colour, such as green on skin. For that case, raise *Interior Strength* or use *Subtract Screen*.
+
+---
+
 ## Performance
 
-Render time per frame, CPU vs GPU, measured with `ofx_bench` (best of 5 runs). GPU times include the host ↔ GPU transfers, as in Nuke. CPU and GPU renders are identical in every test.
+Render time per frame, CPU vs GPU, measured with `ofx_bench` (best of 5 runs). GPU times include the host ↔ GPU transfers, as in Nuke. CPU and GPU renders are identical in every test (differences below 1e-5 of the pixel values).
 
 **Test configuration**
 
@@ -147,31 +294,39 @@ Render time per frame, CPU vs GPU, measured with `ofx_bench` (best of 5 runs). G
 
 | Test | CPU | GPU | GPU speed-up |
 |---|---|---|---|
-| push_IT Interpolate | 72 ms | 21.5 ms | ×3.4 |
-| push_IT Stretch | 80 ms | 27.6 ms | ×2.9 |
-| push_IT Stretch + Max Distance + Spread Blur 50 | 136 ms | 29.2 ms | ×4.7 |
-| push_IT Vector Warp 300 px | 149 ms | 25.9 ms | ×5.8 |
-| push_IT Contract (Edge Shrink 5, Edge Softness 5) | 129 ms | 28.0 ms | ×4.6 |
-| push_IT Interpolate + Spread Blur 500 | 148 ms | 28.4 ms | ×5.2 |
-| expo_GLOW Max Size 2000, gaussian, 10 steps | 156 ms | 27.5 ms | ×5.7 |
-| expo_GLOW Max Size 2000, box, 10 steps | 104 ms | 24.3 ms | ×4.3 |
-| expo_GLOW Max Size 300, gaussian, 20 steps | 376 ms | 33.7 ms | ×11.2 |
+| push_IT Interpolate | 72 ms | 22.2 ms | ×3.3 |
+| push_IT Stretch | 80 ms | 24.9 ms | ×3.2 |
+| push_IT Stretch + Max Distance + Spread Blur 50 | 133 ms | 29.1 ms | ×4.6 |
+| push_IT Vector Warp 300 px | 155 ms | 26.0 ms | ×6.0 |
+| push_IT Contract (Edge Shrink 5, Edge Softness 5) | 117 ms | 24.7 ms | ×4.7 |
+| push_IT Interpolate + Spread Blur 500 | 126 ms | 28.5 ms | ×4.4 |
+| expo_GLOW Max Size 2000, gaussian, 10 steps | 152 ms | 22.8 ms | ×6.7 |
+| expo_GLOW Max Size 2000, box, 10 steps | 102 ms | 21.6 ms | ×4.7 |
+| expo_GLOW Max Size 300, gaussian, 20 steps | 375 ms | 30.4 ms | ×12.3 |
+| L_Despill default (log, average) | 46 ms | 21.0 ms | ×2.2 |
+| L_Despill Median 5 + Clean 4 + Matte Blur 20 + BG | 346 ms | 47.7 ms | ×7.2 |
+| despill_IT default | 217 ms | 31.1 ms | ×7.0 |
+| despill_IT + Spill Light (BG) + Light Wrap | 384 ms | 40.9 ms | ×9.4 |
 
 **UHD (3840×2160)**
 
 | Test | CPU | GPU | GPU speed-up |
 |---|---|---|---|
-| push_IT Interpolate | 250 ms | 82.3 ms | ×3.0 |
-| push_IT Stretch | 251 ms | 89.3 ms | ×2.8 |
-| push_IT Stretch + Max Distance + Spread Blur 50 | 496 ms | 103.6 ms | ×4.8 |
-| push_IT Vector Warp 300 px | 490 ms | 93.0 ms | ×5.3 |
-| push_IT Contract (Edge Shrink 5, Edge Softness 5) | 338 ms | 94.7 ms | ×3.6 |
-| push_IT Interpolate + Spread Blur 500 | 491 ms | 98.2 ms | ×5.0 |
-| expo_GLOW Max Size 2000, gaussian, 10 steps | 732 ms | 99.0 ms | ×7.4 |
-| expo_GLOW Max Size 2000, box, 10 steps | 389 ms | 96.9 ms | ×4.0 |
-| expo_GLOW Max Size 300, gaussian, 20 steps | 2024 ms | 124.6 ms | ×16.2 |
+| push_IT Interpolate | 292 ms | 84.0 ms | ×3.5 |
+| push_IT Stretch | 276 ms | 89.7 ms | ×3.1 |
+| push_IT Stretch + Max Distance + Spread Blur 50 | 552 ms | 101.9 ms | ×5.4 |
+| push_IT Vector Warp 300 px | 492 ms | 101.9 ms | ×4.8 |
+| push_IT Contract (Edge Shrink 5, Edge Softness 5) | 343 ms | 101.1 ms | ×3.4 |
+| push_IT Interpolate + Spread Blur 500 | 555 ms | 100.2 ms | ×5.5 |
+| expo_GLOW Max Size 2000, gaussian, 10 steps | 842 ms | 90.6 ms | ×9.3 |
+| expo_GLOW Max Size 2000, box, 10 steps | 407 ms | 98.5 ms | ×4.1 |
+| expo_GLOW Max Size 300, gaussian, 20 steps | 2209 ms | 116.1 ms | ×19.0 |
+| L_Despill default (log, average) | 215 ms | 79.5 ms | ×2.7 |
+| L_Despill Median 5 + Clean 4 + Matte Blur 20 + BG | 1520 ms | 155.3 ms | ×9.8 |
+| despill_IT default | 710 ms | 110.9 ms | ×6.4 |
+| despill_IT + Spill Light (BG) + Light Wrap | 1684 ms | 172.3 ms | ×9.8 |
 
-The GPU is 3 to 16 times faster than the CPU. The gain grows with the cost of the settings (large blurs, Vector Warp, many glow steps), because most of the GPU time is spent moving the image to and from the graphics card: 70 to 80 % in these tests. This test machine is a 2010-era workstation with PCI Express 2.0: on a recent PC (PCI Express 4.0 or newer, DDR4 / DDR5) the transfers are much faster, so the GPU times should be lower and the speed-ups higher.
+The GPU is 2 to 19 times faster than the CPU. The gain grows with the cost of the settings (large blurs, Vector Warp, many glow steps), because most of the GPU time is spent moving the image to and from the graphics card: 70 to 95 % in these tests. A simple per-pixel effect such as the default L_Despill gains little; spatial filters (median, blurs, distances, many glow steps) gain the most. This test machine is a 2010-era workstation with PCI Express 2.0: on a recent PC (PCI Express 4.0 or newer, DDR4 / DDR5) the transfers are much faster, so the GPU times should be lower and the speed-ups higher.
 
 ---
 
@@ -242,8 +397,8 @@ cmake --build build --config Release --parallel
 
 | Option | Default | Effect |
 |---|---|---|
-| `PUSHIT_WITH_CUDA` / `EXPOGLOW_WITH_CUDA` | `ON` | Build the CUDA back-end (if a CUDA compiler is found). |
-| `PUSHIT_CUDA_ARCHS` / `EXPOGLOW_CUDA_ARCHS` | empty (automatic) | GPU architectures, e.g. `"75-real;86-real"`. |
+| `PUSHIT_WITH_CUDA` / `EXPOGLOW_WITH_CUDA` / `LDESPILL_WITH_CUDA` / `DESPILLIT_WITH_CUDA` | `ON` | Build the CUDA back-end (if a CUDA compiler is found). |
+| `PUSHIT_CUDA_ARCHS` / `EXPOGLOW_CUDA_ARCHS` / `LDESPILL_CUDA_ARCHS` / `DESPILLIT_CUDA_ARCHS` | empty (automatic) | GPU architectures, e.g. `"75-real;86-real"`. |
 | `EXPOGLOW_AVX2` | `OFF` | AVX2 / FMA on the CPU, about 15 % faster. The plug-in will **not load** on a CPU without AVX2 (before Intel Haswell / AMD Ryzen). |
 | `OPENFX_ROOT` | empty | Use a local OpenFX SDK checkout instead of downloading it. |
 
@@ -261,7 +416,7 @@ Copy the `.ofx.bundle` folder into the OFX plug-in folder of your system:
 
 You can also put the bundles in any folder and add that folder to the `OFX_PLUGIN_PATH` environment variable.
 
-The nodes appear in the **Filter** menu (e.g. **Filter > push_IT_OFX**), or with Tab.
+The nodes appear in the **Filter** menu (push_IT_OFX, expo_GLOW_OFX) and the **Keyer** menu (L_Despill_OFX, despill_IT_OFX), or with Tab.
 
 **After an installation or an update, clear Nuke's OFX cache** (close Nuke first). Otherwise Nuke may keep showing the old version or not show the node at all:
 - Windows: delete `%LOCALAPPDATA%\Temp\nuke\ofxplugincache`
@@ -288,7 +443,7 @@ If CUDA is not available or a GPU render fails, the frame is rendered on the CPU
 - Windows: run `ofx_bench\build_and_run.bat`. The results are written to `bench_result.txt`.
 - Linux: run `ofx_bench/run.sh`.
 
-The benchmark contains a copy of the plug-in sources (`ofx_bench/src/push_it`, `ofx_bench/src/expo_glow`): copy the files again after changing a plug-in.
+The benchmark contains a copy of the plug-in sources (`ofx_bench/src/push_it`, `ofx_bench/src/expo_glow`, `ofx_bench/src/l_despill`, `ofx_bench/src/despill_it`): copy the files again after changing a plug-in.
 
 ---
 
@@ -296,4 +451,5 @@ The benchmark contains a copy of the plug-in sources (`ofx_bench/src/push_it`, `
 
 - expo_GLOW_OFX is based on **apGlow v1.2** by Adrian Pueyo, [adrianpueyo.com](https://www.adrianpueyo.com), 2015-2022.
 - push_IT_OFX is inspired by the *Pixel Spread* effect of Autodesk Flame.
+- L_Despill_OFX is based on the **L_Despill v05** gizmo by Luma Pictures and the **DespillMadness** gizmo.
 - Built on the [OpenFX](https://github.com/AcademySoftwareFoundation/openfx) SDK.
