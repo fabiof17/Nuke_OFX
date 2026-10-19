@@ -137,7 +137,7 @@ As in Nuke, the blurs see the source (and the Area input) with their edge pixels
 
 Spill suppression for keying. The screen channel is limited by a mix of the two other channels; the amount of spill removed gives a **spill matte**, which can be filtered and then drives a grade of the despilled area, a grade of the foreground and the re-light of the edges with a background.
 
-It brings together the features of two widely used gizmos, **L_Despill v05** (Luma Pictures) and **DespillMadness**, with their inconsistencies fixed (see below).
+It brings together the features of two widely used gizmos, **L_Despill v05** by Justin Johnson (Luma Pictures) and **DespillMadness**, with their inconsistencies fixed (see below).
 
 ### Inputs
 
@@ -261,6 +261,87 @@ A spatially aware despill. A classic despill (such as L_Despill_OFX) treats ever
 - **Output**: the result, or a view to set up the effect (spill map, despill strength, key, local screen, propagated core colour).
 - **Alpha Output** (source alpha, key, spill map), **Invert Mask**, **Mix**.
 
+### How to use
+
+The defaults come from tests on a synthetic plate. Treat them as starting points to adjust on real plates.
+
+**1. Connect the node**
+
+```
+Plate ──────────────┬──► despill_IT_OFX (Source) ──► … ──► Premult ──► Merge (over) ──► BG
+Keyer (alpha) ──────┘    (Key, optional)
+BG ───────────────────►  (BG, optional)
+```
+
+- **Source**: the raw plate, not premultiplied.
+- **Key** (recommended): the output of a keyer (IBK, Keylight, Primatte…). Only its alpha is read (1 = subject). Without it, an internal key is used, which is enough to start.
+- **BG** (optional): the final background, for the spill light and the light wrap.
+- **CleanPlate** (optional): a plate of the empty screen, if you have one.
+- **Protect** (optional): a roto of areas to leave untouched (green eyes, for example).
+
+The node outputs a despilled, unpremultiplied image. Keying and premultiplication happen afterwards, as usual.
+
+**2. Pick the screen colour**
+
+With the **Screen Color** colour picker, sample a clean, evenly lit part of the screen. This is the most important setting: it gives the reference hue and the channel to treat (green or blue).
+
+Leave **Screen Source** on *From Plate*: the screen colour is then estimated around every pixel, which handles uneven screens. To check it, set **Output** to *Local Screen*: you should see the screen rebuilt behind the subject, with no trace of the subject.
+
+**3. Check the key**
+
+Set **Output** to *Key*: the subject should be white, the screen black.
+- With a Key input, you see the alpha of your keyer.
+- Without one, adjust **Key Low** and **Key High** until the screen is black and the subject white. This key does not need to be perfect: it only locates the screen and the core of the subject, it is not used for the final composite.
+
+**4. Set where the despill acts (the key step)**
+
+Set **Output** to *Strength*: white = full despill, black = none.
+- **Edge Width** (4 px): distance from the screen over which the despill is full.
+- **Edge Falloff** (40 px): distance over which it fades towards the inside of the subject.
+- **Interior Strength** (0.15): what remains in the core of the subject. Raise it if reflected spill remains far from the edges (green on clothes, under the chin…); lower it if wanted colours get damaged.
+
+The *Spill Map* view shows the amount of spill actually removed.
+
+**5. Protect colours**
+
+If a colour close to the screen must stay untouched, use the *Protection* settings:
+- **Protect Hue**: hue to protect, in degrees (30 = skin, 180 = teal).
+- **Protect Range**: its width (0 = off). Start around 10–20.
+- **Protect Softness**: softness of the transition.
+
+For a specific area, connect a roto to the **Protect** input instead.
+
+**6. Choose the despill mode**
+
+- **Screen Channel** (default): classic despill, but relative to the local screen. The safest choice.
+- **Neutralize**: the screen colour becomes neutral grey of the same brightness. Edges stay bright.
+- **Subtract Screen**: removes all of the screen light. Physically right for reflected spill, but edges get darker; combine it with *Spill Light = Background*.
+
+**Edge Restore** (0.75) rebuilds the colour of semi-transparent edges (hair, motion blur) from the core of the subject, so that hair does not turn grey. The *Core Colour* view shows the propagated colour.
+
+**7. Blend with the background (when BG is connected)**
+
+- **Spill Light = Background**: the removed screen light is replaced by the light of the blurred background, so the subject takes the colour of its new surroundings.
+- **BG Gain**: intensity of that light. **BG Blur**: softness of the background used.
+- **Light Wrap** (0 by default): adds the blurred background on the inner edges of the subject. Keep it subtle: 0.1–0.3 is usually enough.
+
+**8. Finishing**
+
+- **Strength**: overall despill amount.
+- **Alpha Output**: outputs the key or the spill map in the alpha, to use them further down the script.
+- **Mix** and **Mask**: as on any Nuke node.
+
+**Quick recipes**
+
+| Situation | Settings |
+|---|---|
+| Simple shot, clean screen | Screen Color with the picker, everything else at default |
+| Uneven screen (vignetting, folds) | *Screen Source* on From Plate (default), or Clean Plate if you have one |
+| Blond hair turning grey | Edge Restore → 1, Despill Math → Max |
+| Green or teal clothes | Interior Strength → 0, or Protect Hue on their hue |
+| Reflected spill in the middle of the subject | Interior Strength → 0.4–0.6 |
+| Strong integration with the background | BG connected, Spill Light = Background, Light Wrap 0.2 |
+
 ### Compared with a classic despill
 
 Measured on a synthetic plate: an uneven green screen, a subject with skin, blond hair with soft edges, green spill reflected near the edges, and a teal shirt. The figures are the mean error against the true colours (lower is better), with default settings.
@@ -305,8 +386,8 @@ Render time per frame, CPU vs GPU, measured with `ofx_bench` (best of 5 runs). G
 | expo_GLOW Max Size 300, gaussian, 20 steps | 375 ms | 30.4 ms | ×12.3 |
 | L_Despill default (log, average) | 46 ms | 21.0 ms | ×2.2 |
 | L_Despill Median 5 + Clean 4 + Matte Blur 20 + BG | 346 ms | 47.7 ms | ×7.2 |
-| despill_IT default | 217 ms | 31.1 ms | ×7.0 |
-| despill_IT + Spill Light (BG) + Light Wrap | 384 ms | 40.9 ms | ×9.4 |
+| despill_IT default | 189 ms | 27.3 ms | ×6.9 |
+| despill_IT + Spill Light (BG) + Light Wrap | 227 ms | 31.9 ms | ×7.1 |
 
 **UHD (3840×2160)**
 
@@ -323,8 +404,8 @@ Render time per frame, CPU vs GPU, measured with `ofx_bench` (best of 5 runs). G
 | expo_GLOW Max Size 300, gaussian, 20 steps | 2209 ms | 116.1 ms | ×19.0 |
 | L_Despill default (log, average) | 215 ms | 79.5 ms | ×2.7 |
 | L_Despill Median 5 + Clean 4 + Matte Blur 20 + BG | 1520 ms | 155.3 ms | ×9.8 |
-| despill_IT default | 710 ms | 110.9 ms | ×6.4 |
-| despill_IT + Spill Light (BG) + Light Wrap | 1684 ms | 172.3 ms | ×9.8 |
+| despill_IT default | 640 ms | 91.9 ms | ×7.0 |
+| despill_IT + Spill Light (BG) + Light Wrap | 816 ms | 123.8 ms | ×6.6 |
 
 The GPU is 2 to 19 times faster than the CPU. The gain grows with the cost of the settings (large blurs, Vector Warp, many glow steps), because most of the GPU time is spent moving the image to and from the graphics card: 70 to 95 % in these tests. A simple per-pixel effect such as the default L_Despill gains little; spatial filters (median, blurs, distances, many glow steps) gain the most. This test machine is a 2010-era workstation with PCI Express 2.0: on a recent PC (PCI Express 4.0 or newer, DDR4 / DDR5) the transfers are much faster, so the GPU times should be lower and the speed-ups higher.
 
@@ -451,5 +532,5 @@ The benchmark contains a copy of the plug-in sources (`ofx_bench/src/push_it`, `
 
 - expo_GLOW_OFX is based on **apGlow v1.2** by Adrian Pueyo, [adrianpueyo.com](https://www.adrianpueyo.com), 2015-2022.
 - push_IT_OFX is inspired by the *Pixel Spread* effect of Autodesk Flame.
-- L_Despill_OFX is based on the **L_Despill v05** gizmo by Luma Pictures and the **DespillMadness** gizmo.
+- L_Despill_OFX is based on the **L_Despill v05** gizmo by Justin Johnson (Luma Pictures) and the **DespillMadness** gizmo.
 - Built on the [OpenFX](https://github.com/AcademySoftwareFoundation/openfx) SDK.

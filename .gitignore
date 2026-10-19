@@ -1,0 +1,6 @@
+# build outputs
+build/
+build-cpu/
+build.log
+bench_result.txt
+*.ofx.bundle/
