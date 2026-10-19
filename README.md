@@ -365,7 +365,7 @@ Render time per frame, CPU vs GPU, measured with `ofx_bench` (best of 5 runs). G
 
 | | |
 |---|---|
-| CPU | Intel Xeon X5675 @ 3.07 GHz, 6 cores / 12 threads (Westmere, no AVX2: plug-ins built without AVX2) |
+| CPU | 2 × Intel Xeon X5675 @ 3.07 GHz, 12 cores / 24 threads in total (Westmere, no AVX2: plug-ins built without AVX2) |
 | RAM | 96 GB DDR3 |
 | GPU | NVIDIA GeForce RTX 3060 Ti, 8 GB |
 | GPU link | PCI Express 2.0, about 6 GB/s host ↔ GPU (page-locked memory) |
@@ -375,39 +375,39 @@ Render time per frame, CPU vs GPU, measured with `ofx_bench` (best of 5 runs). G
 
 | Test | CPU | GPU | GPU speed-up |
 |---|---|---|---|
-| push_IT Interpolate | 72 ms | 22.2 ms | ×3.3 |
-| push_IT Stretch | 80 ms | 24.9 ms | ×3.2 |
-| push_IT Stretch + Max Distance + Spread Blur 50 | 133 ms | 29.1 ms | ×4.6 |
-| push_IT Vector Warp 300 px | 155 ms | 26.0 ms | ×6.0 |
-| push_IT Contract (Edge Shrink 5, Edge Softness 5) | 117 ms | 24.7 ms | ×4.7 |
-| push_IT Interpolate + Spread Blur 500 | 126 ms | 28.5 ms | ×4.4 |
-| expo_GLOW Max Size 2000, gaussian, 10 steps | 152 ms | 22.8 ms | ×6.7 |
-| expo_GLOW Max Size 2000, box, 10 steps | 102 ms | 21.6 ms | ×4.7 |
-| expo_GLOW Max Size 300, gaussian, 20 steps | 375 ms | 30.4 ms | ×12.3 |
-| L_Despill default (log, average) | 46 ms | 21.0 ms | ×2.2 |
-| L_Despill Median 5 + Clean 4 + Matte Blur 20 + BG | 346 ms | 47.7 ms | ×7.2 |
-| despill_IT default | 189 ms | 27.3 ms | ×6.9 |
-| despill_IT + Spill Light (BG) + Light Wrap | 227 ms | 31.9 ms | ×7.1 |
+| push_IT Interpolate | 83 ms | 22.8 ms | ×3.6 |
+| push_IT Stretch | 90 ms | 26.6 ms | ×3.4 |
+| push_IT Stretch + Max Distance + Spread Blur 50 | 140 ms | 30.0 ms | ×4.7 |
+| push_IT Vector Warp 300 px | 153 ms | 25.8 ms | ×5.9 |
+| push_IT Contract (Edge Shrink 5, Edge Softness 5) | 131 ms | 24.8 ms | ×5.3 |
+| push_IT Interpolate + Spread Blur 500 | 139 ms | 26.9 ms | ×5.2 |
+| expo_GLOW Max Size 2000, gaussian, 10 steps | 144 ms | 22.8 ms | ×6.3 |
+| expo_GLOW Max Size 2000, box, 10 steps | 104 ms | 21.8 ms | ×4.8 |
+| expo_GLOW Max Size 300, gaussian, 20 steps | 337 ms | 30.1 ms | ×11.2 |
+| L_Despill default (log, average) | 31 ms | 20.1 ms | ×1.5 |
+| L_Despill Median 5 + Clean 4 + Matte Blur 20 + BG | 221 ms | 39.5 ms | ×5.6 |
+| despill_IT default | 198 ms | 25.8 ms | ×7.7 |
+| despill_IT + Spill Light (BG) + Light Wrap | 245 ms | 34.3 ms | ×7.1 |
 
 **UHD (3840×2160)**
 
 | Test | CPU | GPU | GPU speed-up |
 |---|---|---|---|
-| push_IT Interpolate | 292 ms | 84.0 ms | ×3.5 |
-| push_IT Stretch | 276 ms | 89.7 ms | ×3.1 |
-| push_IT Stretch + Max Distance + Spread Blur 50 | 552 ms | 101.9 ms | ×5.4 |
-| push_IT Vector Warp 300 px | 492 ms | 101.9 ms | ×4.8 |
-| push_IT Contract (Edge Shrink 5, Edge Softness 5) | 343 ms | 101.1 ms | ×3.4 |
-| push_IT Interpolate + Spread Blur 500 | 555 ms | 100.2 ms | ×5.5 |
-| expo_GLOW Max Size 2000, gaussian, 10 steps | 842 ms | 90.6 ms | ×9.3 |
-| expo_GLOW Max Size 2000, box, 10 steps | 407 ms | 98.5 ms | ×4.1 |
-| expo_GLOW Max Size 300, gaussian, 20 steps | 2209 ms | 116.1 ms | ×19.0 |
-| L_Despill default (log, average) | 215 ms | 79.5 ms | ×2.7 |
-| L_Despill Median 5 + Clean 4 + Matte Blur 20 + BG | 1520 ms | 155.3 ms | ×9.8 |
-| despill_IT default | 640 ms | 91.9 ms | ×7.0 |
-| despill_IT + Spill Light (BG) + Light Wrap | 816 ms | 123.8 ms | ×6.6 |
+| push_IT Interpolate | 252 ms | 84.7 ms | ×3.0 |
+| push_IT Stretch | 275 ms | 89.2 ms | ×3.1 |
+| push_IT Stretch + Max Distance + Spread Blur 50 | 492 ms | 104.6 ms | ×4.7 |
+| push_IT Vector Warp 300 px | 444 ms | 100.8 ms | ×4.4 |
+| push_IT Contract (Edge Shrink 5, Edge Softness 5) | 339 ms | 95.9 ms | ×3.5 |
+| push_IT Interpolate + Spread Blur 500 | 461 ms | 96.6 ms | ×4.8 |
+| expo_GLOW Max Size 2000, gaussian, 10 steps | 620 ms | 89.6 ms | ×6.9 |
+| expo_GLOW Max Size 2000, box, 10 steps | 358 ms | 92.1 ms | ×3.9 |
+| expo_GLOW Max Size 300, gaussian, 20 steps | 1583 ms | 112.9 ms | ×14.0 |
+| L_Despill default (log, average) | 146 ms | 77.9 ms | ×1.9 |
+| L_Despill Median 5 + Clean 4 + Matte Blur 20 + BG | 828 ms | 146.2 ms | ×5.7 |
+| despill_IT default | 606 ms | 93.2 ms | ×6.5 |
+| despill_IT + Spill Light (BG) + Light Wrap | 713 ms | 124.7 ms | ×5.7 |
 
-The GPU is 2 to 19 times faster than the CPU. The gain grows with the cost of the settings (large blurs, Vector Warp, many glow steps), because most of the GPU time is spent moving the image to and from the graphics card: 70 to 95 % in these tests. A simple per-pixel effect such as the default L_Despill gains little; spatial filters (median, blurs, distances, many glow steps) gain the most. This test machine is a 2010-era workstation with PCI Express 2.0: on a recent PC (PCI Express 4.0 or newer, DDR4 / DDR5) the transfers are much faster, so the GPU times should be lower and the speed-ups higher.
+The GPU is 1.5 to 14 times faster than the CPU. The gain grows with the cost of the settings (large blurs, Vector Warp, many glow steps), because most of the GPU time is spent moving the image to and from the graphics card: 70 to 95 % in these tests. A simple per-pixel effect such as the default L_Despill gains little; spatial filters (median, blurs, distances, many glow steps) gain the most. This test machine is a 2010-era workstation with PCI Express 2.0: on a recent PC (PCI Express 4.0 or newer, DDR4 / DDR5) the transfers are much faster, so the GPU times should be lower and the speed-ups higher.
 
 ---
 
