@@ -76,7 +76,7 @@ Edge extend for compositing, similar to the *Pixel Spread* tool of Autodesk Flam
 - **Extend BBox to Format**: grows the bounding box to the format so that the spread reaches the image borders.
 
 **Viewer**
-- **Show Overlay**: while the node panel is open, the viewer shows:
+- **Show Widgets**: while the node panel is open, the viewer shows:
   - with *Vector Warp* and a constant vector, an **arrow** for *Angle* and *Length*: drag its tip to set both;
   - with *Max Distance* > 0, a **dashed circle** of that radius: drag its handle to change it;
   - a **centre cross** that moves these widgets (they only show sizes and directions, their position does not change the render).
@@ -138,7 +138,7 @@ Formerly named expo_GLOW_OFX. The plug-in identifier has not changed, so Nuke sc
 - **Invert Area**, **Invert Mask**, **Mix**.
 
 **Viewer**
-- **Show Overlay**: while the node panel is open, the viewer shows one circle per glow step (diameter = blur size of the step, *Size Scale* included), the largest one solid. Drag its handle to set *Max Size*. The widget stays at the centre of the format.
+- **Show Widgets**: while the node panel is open, the viewer shows one circle per glow step (diameter = blur size of the step, *Size Scale* included), the largest one solid. Drag its handle to set *Max Size*. The widget stays at the centre of the format.
 
 As in Nuke, the blurs see the source (and the Area input) with their edge pixels repeated beyond the bounding box, so the glow does not darken near the image borders.
 
@@ -274,7 +274,8 @@ A spatially aware despill. A classic despill (such as L_Despill_OFX) treats ever
 
 **Viewer**
 - **Sample Screen** (under Screen Color) and the **sample area** drawn in the viewer: move its corners or its centre, or Shift + drag anywhere to draw a new area. On release, *Screen Color* becomes the average colour of the Source inside the area; the button samples it again (after a frame change, for instance). A small swatch next to the area shows the current Screen Color.
-- **Show Overlay**: shows the sample area and, with *Spatial* on, a **distance probe**: a solid circle of radius *Edge Width* and a dashed one of radius *Edge Width + Edge Falloff*. It stays at the centre of the format; drag its handles to change the two values.
+- **Show Widgets**: shows the sample area and, with *Spatial* on, a **distance probe**: a solid circle of radius *Edge Width* and a dashed one of radius *Edge Width + Edge Falloff*. It stays at the centre of the format; drag its handles to change the two values.
+- **Show Overlay** (needs *Spatial*): tints in semi-transparent blue the pixels of the subject that get the edge despill, from the screen up to *Edge Width + Edge Falloff*: 50 % over *Edge Width*, fading to 20 % at the end of *Edge Falloff*. Unlike the widgets, the tint is part of the rendered image: turn it off before rendering.
 
 ### How to use
 

@@ -76,6 +76,7 @@ struct Params {
     int   output = kOutResult;
     int   alphaOut = kAlphaSource;
     float mix = 1.f;
+    bool  showZone = false;                       // Show Overlay: edge zone tinted blue (viewing aid)
 };
 
 // ------------------------------------------------------------------ helpers
@@ -289,6 +290,14 @@ DI_HD void finalPixel(const Params& p, const float* src4, const float* S, float 
 
     const float k = p.mix * mask;
     for (int i = 0; i < 4; ++i) out4[i] = src4[i] + (o[i] - src4[i]) * k;
+
+    // Show Overlay: the subject pixels from the screen up to Edge Width + Edge Falloff are tinted
+    // blue, 50 % over Edge Width, fading to 20 % at the end of Edge Falloff (RGB only, alpha kept)
+    if (p.showZone && p.spatial && dist > 0.f && dist <= p.edgeWidth + p.edgeFalloff) {
+        const float a = 0.5f - 0.3f * smoothstep01(p.edgeWidth, p.edgeWidth + p.edgeFalloff, dist);
+        const float B[3] = { 0.1f, 0.35f, 1.f };
+        for (int i = 0; i < 3; ++i) out4[i] += (B[i] - out4[i]) * a;
+    }
 }
 
 // ------------------------------------------------------------- push-pull (RGBW)

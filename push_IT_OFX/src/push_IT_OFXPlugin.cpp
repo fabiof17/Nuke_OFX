@@ -69,7 +69,7 @@ static const char* kParamPremultOutput   = "premultiplyOutput";
 static const char* kParamExtendToFormat  = "extendToFormat";
 static const char* kParamUseGPU          = "useGPU";
 static const char* kParamGPUStatus       = "gpuStatus";
-static const char* kParamShowOverlay     = "showOverlay";
+static const char* kParamShowOverlay     = "showOverlay";   // label "Show Widgets" (name kept for existing scripts)
 static const char* kParamOverlayOffset   = "overlayOffset";
 
 // Layout hint (host extension, not in the base OFX headers).
@@ -457,7 +457,7 @@ void push_IT_OFXPlugin::render(const OFX::RenderArguments& args)
 
 // ================================================================= factory
 // ================================================================== viewer overlay
-// Drawn while the node panel is open (Show Overlay on):
+// Drawn while the node panel is open (Show Widgets on):
 //   - a centre cross, draggable, where the widgets are anchored (format centre + offset);
 //   - Vector Warp with a constant vector: an arrow showing Angle and Length; drag its tip;
 //   - Max Distance > 0: a dashed circle of that radius; drag its handle to change it.
@@ -864,7 +864,7 @@ void push_IT_OFXFactory::describeInContext(OFX::ImageEffectDescriptor& desc, OFX
     // ---- viewer
     defineSection(desc, page, last, "sectionViewer", "Viewer");
     {
-        OFX::BooleanParamDescriptor* b = defineBool(desc, page, nullptr, kParamShowOverlay, "Show Overlay",
+        OFX::BooleanParamDescriptor* b = defineBool(desc, page, nullptr, kParamShowOverlay, "Show Widgets",
             "Shows the viewer widgets while the panel is open: the Vector Warp arrow (constant vector: drag its tip to "
             "set Angle and Length) and the Max Distance circle (drag its handle). Drag the centre cross to move them.",
             true);

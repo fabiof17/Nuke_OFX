@@ -56,7 +56,7 @@ static const char* kParamEnableOverscan = "enableOverscan";
 static const char* kParamInvertArea     = "invertArea";
 static const char* kParamInvertMask     = "invertMask";
 static const char* kParamMix            = "mix";
-static const char* kParamShowOverlay    = "showOverlay";
+static const char* kParamShowOverlay    = "showOverlay";   // label "Show Widgets" (name kept for existing scripts)
 static const char* kParamOverlayOffset  = "overlayOffset";
 
 // Layout hint (host extension, not in the base OFX headers): keep next param on the same line.
@@ -499,7 +499,7 @@ void ExpoGlowPlugin::render(const OFX::RenderArguments& args)
 
 // ================================================================= factory
 // ================================================================== viewer overlay
-// Drawn while the node panel is open (Show Overlay on): one circle per glow step (diameter =
+// Drawn while the node panel is open (Show Widgets on): one circle per glow step (diameter =
 // blur size of the step, Size Scale included), the largest one solid. Drag its handle to set
 // Max Size. The widget stays at the centre of the format.
 namespace {
@@ -811,7 +811,7 @@ void ExpoGlowFactory::describeInContext(OFX::ImageEffectDescriptor& desc, OFX::C
 
     // ---- viewer
     {
-        OFX::BooleanParamDescriptor* b = boolean(desc, page, nullptr, kParamShowOverlay, "Show Overlay",
+        OFX::BooleanParamDescriptor* b = boolean(desc, page, nullptr, kParamShowOverlay, "Show Widgets",
             "Shows the glow sizes in the viewer while the panel is open: one circle per step, the largest one "
             "solid (drag its handle to set Max Size). The widget stays at the centre of the format.", true);
         b->setEvaluateOnChange(false);

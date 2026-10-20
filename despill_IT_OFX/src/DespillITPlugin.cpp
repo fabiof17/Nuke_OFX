@@ -84,7 +84,8 @@ static const char* kParamSample       = "sampleScreen";
 static const char* kParamSampleA      = "sampleCorner1";     // corners of the sample area, fractions of the format
 static const char* kParamSampleB      = "sampleCorner2";
 static const char* kParamSampleTrig   = "sampleTrigger";     // bumped by the overlay when a sample area is released
-static const char* kParamShowOverlay  = "showOverlay";
+static const char* kParamShowOverlay  = "showOverlay";     // "Show Widgets" (name kept for existing scripts)
+static const char* kParamShowZone     = "showEdgeZone";    // "Show Overlay": edge zone tinted in the image
 static const char* kParamProbeOffset  = "probeOffset";
 
 static const char* kPropLayoutHint = "OfxParamPropLayoutHint";
@@ -269,6 +270,7 @@ private:
     OFX::DoubleParam*  _coreAbove;
     OFX::DoubleParam*  _strength;
     OFX::BooleanParam* _spatial;
+    OFX::BooleanParam* _showZone;
     OFX::DoubleParam*  _edgeWidth;
     OFX::DoubleParam*  _edgeFalloff;
     OFX::DoubleParam*  _interior;
@@ -312,6 +314,7 @@ DespillITPlugin::DespillITPlugin(OfxImageEffectHandle handle)
     _coreAbove    = fetchDoubleParam(kParamCoreAbove);
     _strength     = fetchDoubleParam(kParamStrength);
     _spatial      = fetchBooleanParam(kParamSpatial);
+    _showZone     = fetchBooleanParam(kParamShowZone);
     _edgeWidth    = fetchDoubleParam(kParamEdgeWidth);
     _edgeFalloff  = fetchDoubleParam(kParamEdgeFalloff);
     _interior     = fetchDoubleParam(kParamInterior);
@@ -345,6 +348,7 @@ void DespillITPlugin::updateParamsState()
     _edgeWidth->setEnabled(spatial);
     _edgeFalloff->setEnabled(spatial);
     _interior->setEnabled(spatial);
+    _showZone->setEnabled(spatial);
     const bool bg = _bgClip->isConnected();
     _spillLight->setEnabled(bg);
     _bgGain->setEnabled(bg);
@@ -434,6 +438,7 @@ Params DespillITPlugin::paramsAt(double t, double scale)
     p.output = choiceAt(_output, t);
     p.alphaOut = choiceAt(_alphaOut, t);
     p.mix = (float)_mix->getValueAtTime(t);
+    p.showZone = _showZone->getValueAtTime(t);
     return p;
 }
 
@@ -559,7 +564,7 @@ void DespillITPlugin::render(const OFX::RenderArguments& args)
 
 // ================================================================= factory
 // ================================================================== viewer overlay
-// Drawn while the node panel is open (Show Overlay on):
+// Drawn while the node panel is open (Show Widgets on):
 //   - the screen sample area: drag its corners or its centre; Shift + drag anywhere draws a new
 //     area. On release, Screen Color becomes the average colour of the Source inside it;
 //   - with Spatial on, a distance probe: a solid circle of radius Edge Width and a dashed one of
@@ -1019,12 +1024,18 @@ void DespillITFactory::describeInContext(OFX::ImageEffectDescriptor& desc, OFX::
 
     // ---- viewer
     {
-        OFX::BooleanParamDescriptor* b = boolean(desc, page, kParamShowOverlay, "Show Overlay",
+        OFX::BooleanParamDescriptor* b = boolean(desc, page, kParamShowOverlay, "Show Widgets",
             "Shows the viewer widgets while the panel is open: the screen sample area (see Sample Screen) and, with "
             "Spatial on, a probe at the centre of the format with circles of radius Edge Width and Edge Width + "
             "Edge Falloff (drag their handles to change them).", true);
         b->setEvaluateOnChange(false);
         b->setAnimates(false);
+        b->getPropertySet().propSetInt(kPropLayoutHint, kLayoutHintNoNewLine, false);
+        OFX::BooleanParamDescriptor* z = boolean(desc, page, kParamShowZone, "Show Overlay",
+            "Tints in semi-transparent blue the pixels of the subject from the screen up to Edge Width + Edge "
+            "Falloff: 50 % over Edge Width, fading to 20 % at the end of Edge Falloff. Needs Spatial on.\n"
+            "The tint is part of the rendered image: turn it off before rendering.", false);
+        z->setAnimates(false);
         OFX::Double2DParamDescriptor* o = desc.defineDouble2DParam(kParamProbeOffset);
         o->setLabels("Probe Offset", "Probe Offset", "Probe Offset");
         o->setDoubleType(OFX::eDoubleTypePlain);
