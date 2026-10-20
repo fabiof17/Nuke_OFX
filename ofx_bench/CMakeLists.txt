@@ -20,8 +20,7 @@ add_executable(ofx_bench
     src/push_it/push_IT_OFXCPU.cpp
     src/expo_glow/GlowCPU.cpp
     src/l_despill/DespillCPU.cpp
-    src/despill_it/DespillITCPU.cpp
-    src/master_keyer/MasterKeyerCPU.cpp)
+    src/despill_it/DespillITCPU.cpp)
 target_include_directories(ofx_bench PRIVATE src)
 
 include(CheckLanguage)
@@ -33,18 +32,18 @@ if(CMAKE_CUDA_COMPILER)
     else()
         set(ARCHS "75-real;86-real;89-real;89-virtual")
     endif()
-    target_sources(ofx_bench PRIVATE src/push_it/push_IT_OFXCUDA.cu src/expo_glow/GlowCUDA.cu src/l_despill/DespillCUDA.cu src/despill_it/DespillITCUDA.cu src/master_keyer/MasterKeyerCUDA.cu src/transfer.cu)
+    target_sources(ofx_bench PRIVATE src/push_it/push_IT_OFXCUDA.cu src/expo_glow/GlowCUDA.cu src/l_despill/DespillCUDA.cu src/despill_it/DespillITCUDA.cu src/transfer.cu)
     set_target_properties(ofx_bench PROPERTIES
         CUDA_ARCHITECTURES "${ARCHS}"
         CUDA_RUNTIME_LIBRARY Static
         CUDA_STANDARD 17)
-    # same flags as the plug-ins: push_IT, L_Despill, despill_IT and MasterKeyer without fast-math / FMA, apGlow with fast-math
-    set_source_files_properties(src/push_it/push_IT_OFXCUDA.cu src/l_despill/DespillCUDA.cu src/despill_it/DespillITCUDA.cu src/master_keyer/MasterKeyerCUDA.cu PROPERTIES COMPILE_OPTIONS "--fmad=false")
+    # same flags as the plug-ins: push_IT, L_Despill and despill_IT without fast-math / FMA, apGlow with fast-math
+    set_source_files_properties(src/push_it/push_IT_OFXCUDA.cu src/l_despill/DespillCUDA.cu src/despill_it/DespillITCUDA.cu PROPERTIES COMPILE_OPTIONS "--fmad=false")
     set_source_files_properties(src/expo_glow/GlowCUDA.cu PROPERTIES COMPILE_OPTIONS "--use_fast_math")
     message(STATUS "ofx_bench: CUDA ${CMAKE_CUDA_COMPILER_VERSION}")
 else()
     message(WARNING "CUDA toolkit not found: CPU-only benchmark.")
-    target_sources(ofx_bench PRIVATE src/push_it/push_IT_OFXCUDAStub.cpp src/expo_glow/GlowCUDAStub.cpp src/l_despill/DespillCUDAStub.cpp src/despill_it/DespillITCUDAStub.cpp src/master_keyer/MasterKeyerCUDAStub.cpp src/transfer_stub.cpp)
+    target_sources(ofx_bench PRIVATE src/push_it/push_IT_OFXCUDAStub.cpp src/expo_glow/GlowCUDAStub.cpp src/l_despill/DespillCUDAStub.cpp src/despill_it/DespillITCUDAStub.cpp src/transfer_stub.cpp)
 endif()
 
 if(MSVC)

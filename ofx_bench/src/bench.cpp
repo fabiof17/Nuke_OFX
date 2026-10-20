@@ -1,12 +1,11 @@
-// ofx_bench: standalone CPU / GPU benchmark of the push_IT_OFX, apGlow_OFX, L_Despill_OFX, despill_IT_OFX and
-// MasterKeyer_OFX cores.
+// ofx_bench: standalone CPU / GPU benchmark of the push_IT_OFX, apGlow_OFX, L_Despill_OFX and despill_IT_OFX
+// cores.
 // Runs each test on the CPU and on the CUDA GPU, prints the timings and checks that both
 // give the same image. No Nuke needed.
 #include "push_it/push_IT_OFXCore.h"
 #include "expo_glow/GlowCore.h"
 #include "l_despill/DespillCore.h"
 #include "despill_it/DespillITCore.h"
-#include "master_keyer/MasterKeyerCore.h"
 
 #include <algorithm>
 #include <chrono>
@@ -244,70 +243,6 @@ int main(int argc, char** argv)
             }
         }
 
-        // ---------------- MasterKeyer_OFX (green screen plate made from the test image)
-        {
-            std::vector<float> gs((size_t)4 * w * h), bg3((size_t)3 * w * h);
-            const float S[3] = { 0.08f, 0.45f, 0.12f };
-            for (int y = 0; y < h; ++y)
-                for (int x = 0; x < w; ++x) {
-                    const size_t i = (size_t)y * w + x;
-                    const float a = src[4 * i + 3], g = 0.8f + 0.4f * x / w;
-                    for (int k = 0; k < 3; ++k) {
-                        gs[4 * i + k] = a * plate[4 * i + k] + (1.f - a) * S[k] * g;
-                        bg3[3 * i + k] = plate[4 * ((size_t)(h - 1 - y) * w + x) + k];
-                    }
-                    gs[4 * i + 3] = 1.f;
-                }
-            struct KCase { const char* name; int mode; };
-            const KCase kcs[] = { { "MasterKeyer default", 0 }, { "MasterKeyer local+degrain+blend+BG", 1 },
-                                  { "MasterKeyer Combined KeyIn patches", 2 } };
-            std::vector<float> key3((size_t)3 * w * h);
-            for (size_t i = 0; i < (size_t)w * h; ++i) for (int k = 0; k < 3; ++k) key3[3 * i + k] = gs[4 * i + k];
-            for (const KCase& c : kcs) {
-                mk::Params kp; kp.width = w; kp.height = h;
-                mk::Inputs in; in.src = gs.data();
-                if (c.mode == 2) {
-                    in.keyIn = key3.data();
-                    kp.shadows = 0.5f; kp.midtones = -0.3f; kp.highlights = -1.f; kp.mix = 0.5f; kp.gain = 1.2f;
-                    kp.patch[0].type = mk::kPatchWhite;
-                    kp.patch[1].type = mk::kPatchBlack;
-                    kp.patch[2].type = mk::kPatchEdge;
-                    for (int q = 0; q < 3; ++q) {
-                        kp.patch[0].lo[q] = 0.6f; kp.patch[0].hi[q] = 0.9f;
-                        kp.patch[1].lo[q] = 0.0f; kp.patch[1].hi[q] = 0.1f;
-                        kp.patch[2].lo[q] = 0.3f; kp.patch[2].hi[q] = 0.5f;
-                    }
-                    kp.spillColour[2] = 0.25f;
-                    kp.matteMode = mk::kMatteCombined;
-                    kp.output = mk::kOutFrontPremult;
-                }
-                if (c.mode == 1) {
-                    kp.screenSource = mk::kScreenLocal; kp.degrain = true; kp.shrink = -2; kp.matteBlur = 2.f;
-                    kp.edgeSize = 10.f; kp.edgeFromBG = 0.5f; kp.bgBlur = 30.f; kp.hasBG = true; in.bg = bg3.data();
-                }
-                const double cpu = bestOf(runs, [&] { mk::processCPU(kp, in, outC.data()); return true; });
-                double gpu = -1, diff = 0, peak = 0;
-                if (gpuOk) {
-                    std::string err;
-                    gpu = bestOf(runs, [&] { return mk::processCUDA(kp, in, outG.data(), err); });
-                    if (gpu >= 0) diff = maxDiff(outC, outG, peak);
-                    else std::printf("  GPU error: %s\n", err.c_str());
-                }
-                printRow(c.name, cpu, gpu, diff, peak);
-                if (gpuOk && gpu >= 0) {
-                    std::string err;
-                    mk::cudaSetProfiling(true);
-                    const auto t0 = Clock::now();
-                    mk::processCUDA(kp, in, outG.data(), err);
-                    const double wall = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
-                    mk::cudaSetProfiling(false);
-                    char head[160];
-                    std::snprintf(head, sizeof head, "    %s  (wall clock %.2f ms)\n", c.name, wall);
-                    profiles += head + mk::cudaLastProfile();
-                }
-            }
-        }
-
         if (gpuOk) {
             std::printf("\n  GPU detail per stage (%dx%d):\n%s", w, h, profiles.c_str());
             std::printf("\n  Transfer speed for one RGBA float image (%.0f MB):\n%s", 16.0 * w * h / 1e6,
@@ -318,6 +253,5 @@ int main(int argc, char** argv)
     expoglow::cudaReleaseResources();
     ldespill::cudaReleaseResources();
     dspit::cudaReleaseResources();
-    mk::cudaReleaseResources();
     return 0;
 }
