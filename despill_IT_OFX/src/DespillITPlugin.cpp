@@ -8,11 +8,18 @@
 // Inputs : Source, Key (optional), CleanPlate (optional), BG (optional), Protect (optional),
 //          Mask (optional)
 #include "ofxsImageEffect.h"
+#include "ofxKeySyms.h"
+#include "OverlayGL.h"
 #include "ofxsLog.h"
 
 #include "DespillITCore.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <mutex>
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -73,6 +80,12 @@ static const char* kParamOutput       = "output";
 static const char* kParamAlphaOut     = "alphaOutput";
 static const char* kParamInvertMask   = "invertMask";
 static const char* kParamMix          = "mix";
+static const char* kParamSample       = "sampleScreen";
+static const char* kParamSampleA      = "sampleCorner1";     // corners of the sample area, fractions of the format
+static const char* kParamSampleB      = "sampleCorner2";
+static const char* kParamSampleTrig   = "sampleTrigger";     // bumped by the overlay when a sample area is released
+static const char* kParamShowOverlay  = "showOverlay";
+static const char* kParamProbeOffset  = "probeOffset";
 
 static const char* kPropLayoutHint = "OfxParamPropLayoutHint";
 static const int   kLayoutHintNoNewLine = 2;
@@ -147,6 +160,16 @@ void readRows(const OFX::Image* img, const OfxRectI& rect, int r0, int r1, bool 
             const int sy = repeatEdges ? std::min(std::max(y, bd.y1), bd.y2 - 1) : y;
             if (sy >= bd.y1 && sy < bd.y2) row = static_cast<const float*>(img->getPixelAddress(bd.x1, sy));
         }
+        // fast paths: RGBA image, row fully inside the image: plain copy (RGBA) or tight loop (RGB)
+        if (row && nc == 4 && rect.x1 >= bd.x1 && rect.x2 <= bd.x2 && (mode == kRowRGBA || mode == kRowRGB)) {
+            const float* s = row + (size_t)(rect.x1 - bd.x1) * 4;
+            if (mode == kRowRGBA) {
+                std::memcpy(o, s, sizeof(float) * 4 * (size_t)w);
+            } else {
+                for (int x = 0; x < w; ++x, s += 4, o += 3) { o[0] = s[0]; o[1] = s[1]; o[2] = s[2]; }
+            }
+            continue;
+        }
         for (int x = rect.x1; x < rect.x2; ++x, o += stride) {
             const int sx = repeatEdges ? std::min(std::max(x, bd.x1), bd.x2 - 1) : x;
             put(row && sx >= bd.x1 && sx < bd.x2 ? row + (size_t)(sx - bd.x1) * nc : nullptr, o);
@@ -176,6 +199,35 @@ void writeRows(OFX::Image* img, const OfxRectI& win, int r0, int r1, const float
     }
 }
 
+// ---- render profiling (diagnostics): set the environment variable DESPILLIT_PROFILE=1 before
+// starting Nuke. Each render then writes one line (and the GPU stages) to
+// %TEMP%\despill_IT_profile.txt (Windows) or /tmp/despill_IT_profile.txt, and to the console.
+bool profilingOn()
+{
+    static const bool on = [] { const char* e = std::getenv("DESPILLIT_PROFILE"); return e && *e && *e != '0'; }();
+    return on;
+}
+
+std::atomic<int> gRendersInFlight{ 0 };
+
+void profileLine(const std::string& text)
+{
+    static std::mutex m;
+    std::lock_guard<std::mutex> lock(m);
+    static std::string path = [] {
+        const char* tmp = std::getenv("TEMP");
+        if (!tmp) tmp = std::getenv("TMP");
+        std::string d = tmp ? tmp : "/tmp";
+        return d + "/despill_IT_profile.txt";
+    }();
+    if (FILE* f = std::fopen(path.c_str(), "a")) { std::fputs(text.c_str(), f); std::fclose(f); }
+    std::fputs(text.c_str(), stderr);
+    std::fflush(stderr);
+}
+
+using ProfClock = std::chrono::steady_clock;
+inline double msSince(ProfClock::time_point a) { return std::chrono::duration<double, std::milli>(ProfClock::now() - a).count(); }
+
 inline int choiceAt(OFX::ChoiceParam* p, double t)
 {
     int v = 0;
@@ -200,6 +252,7 @@ public:
 private:
     Params paramsAt(double t, double renderScale);
     void updateParamsState();
+    void sampleScreen(double t, const OfxPointD& renderScale);
 
     OFX::Clip *_dstClip, *_srcClip, *_keyClip, *_cleanClip, *_bgClip, *_protectClip, *_maskClip;
 
@@ -299,9 +352,47 @@ void DespillITPlugin::updateParamsState()
     _wrap->setEnabled(bg);
 }
 
-void DespillITPlugin::changedParam(const OFX::InstanceChangedArgs&, const std::string& name)
+void DespillITPlugin::changedParam(const OFX::InstanceChangedArgs& args, const std::string& name)
 {
     if (name == kParamKeySource || name == kParamSpatial) updateParamsState();
+    if ((name == kParamSample || name == kParamSampleTrig) && args.reason != OFX::eChangeTime)
+        sampleScreen(args.time, args.renderScale);
+}
+
+// Screen Color = average colour of the Source inside the sample area.
+void DespillITPlugin::sampleScreen(double t, const OfxPointD& rs)
+{
+    if (!_srcClip->isConnected()) return;
+    std::unique_ptr<const OFX::Image> img(_srcClip->fetchImage(t));
+    if (!img || img->getPixelDepth() != OFX::eBitDepthFloat) return;
+    const int nc = componentCount(img->getPixelComponents());
+    if (nc < 3) return;
+    double ax, ay, bx, by;
+    fetchDouble2DParam(kParamSampleA)->getValueAtTime(t, ax, ay);
+    fetchDouble2DParam(kParamSampleB)->getValueAtTime(t, bx, by);
+    const OfxPointD off = getProjectOffset(), ext = getProjectExtent();
+    const double par = _srcClip->getPixelAspectRatio() > 0 ? _srcClip->getPixelAspectRatio() : 1.0;
+    const OfxPointD scale = img->getRenderScale();
+    auto px = [&](double f) { return (off.x + f * ext.x) * scale.x / par; };
+    auto py = [&](double f) { return (off.y + f * ext.y) * scale.y; };
+    const OfxRectI bd = img->getBounds();
+    const int x1 = std::max(bd.x1, (int)std::floor(px(std::min(ax, bx)))), x2 = std::min(bd.x2, (int)std::ceil(px(std::max(ax, bx))));
+    const int y1 = std::max(bd.y1, (int)std::floor(py(std::min(ay, by)))), y2 = std::min(bd.y2, (int)std::ceil(py(std::max(ay, by))));
+    double sum[3] = { 0, 0, 0 };
+    long long n = 0;
+    for (int y = y1; y < y2; ++y) {
+        const float* row = static_cast<const float*>(img->getPixelAddress(x1, y));
+        if (!row) continue;
+        for (int x = x1; x < x2; ++x, row += nc) {
+            if (!(std::isfinite(row[0]) && std::isfinite(row[1]) && std::isfinite(row[2]))) continue;
+            sum[0] += row[0]; sum[1] += row[1]; sum[2] += row[2];
+            ++n;
+        }
+    }
+    (void)rs;
+    if (n == 0) return;
+    if (_screenColor->getNumKeys() > 0) _screenColor->setValueAtTime(t, sum[0] / n, sum[1] / n, sum[2] / n);
+    else _screenColor->setValue(sum[0] / n, sum[1] / n, sum[2] / n);
 }
 
 void DespillITPlugin::changedClip(const OFX::InstanceChangedArgs&, const std::string& name)
@@ -366,7 +457,25 @@ void DespillITPlugin::getRegionsOfInterest(const OFX::RegionsOfInterestArguments
 void DespillITPlugin::render(const OFX::RenderArguments& args)
 {
     const double t = args.time;
+    const bool prof = profilingOn();
+    const ProfClock::time_point t0 = ProfClock::now();
+    const int inFlight = ++gRendersInFlight;
+    struct InFlightGuard { ~InFlightGuard() { --gRendersInFlight; } } inFlightGuard;
+    double fetchMs = 0.0, dstMs = 0.0, srcMs = 0.0;
+    std::string path = "CPU";
+    auto report = [&](int w, int h) {
+        if (!prof) return;
+        char buf[256];
+        std::snprintf(buf, sizeof buf,
+                      "despill_IT frame %g  %dx%d  %s  total %.1f ms  (fetch: output %.1f ms, source %.1f ms, all inputs "
+                      "%.1f ms)  renders in parallel: %d\n",
+                      t, w, h, path.c_str(), msSince(t0), dstMs, srcMs, fetchMs, inFlight);
+        std::string line = buf;
+        if (path == "GPU") line += cudaLastProfile();
+        profileLine(line);
+    };
     std::unique_ptr<OFX::Image> dst(_dstClip->fetchImage(t));
+    dstMs = msSince(t0);
     if (!dst) OFX::throwSuiteStatusException(kOfxStatFailed);
     if (dst->getPixelDepth() != OFX::eBitDepthFloat) OFX::throwSuiteStatusException(kOfxStatErrImageFormat);
     const OfxRectI win = dst->getBounds();
@@ -380,7 +489,9 @@ void DespillITPlugin::render(const OFX::RenderArguments& args)
     auto fetch = [&](OFX::Clip* c, bool wanted) -> const OFX::Image* {
         return wanted && c->isConnected() ? c->fetchImage(t) : nullptr;
     };
+    const ProfClock::time_point tSrc = ProfClock::now();
     std::unique_ptr<const OFX::Image> src(fetch(_srcClip, true));
+    srcMs = msSince(tSrc);
     std::unique_ptr<const OFX::Image> key(fetch(_keyClip, p.keySource == kKeyInput));
     std::unique_ptr<const OFX::Image> clean(fetch(_cleanClip, p.screenSource == kScreenCleanPlate));
     p.hasBG = _bgClip->isConnected();
@@ -394,6 +505,7 @@ void DespillITPlugin::render(const OFX::RenderArguments& args)
     p.hasBG = bg != nullptr;
     p.hasProtect = protect != nullptr;
     const bool invertMask = _invertMask->getValueAtTime(t);
+    fetchMs = msSince(t0);
 
     // ---- GPU: rows go straight from the images into the transfer memory and back
     if (_useGPU->getValueAtTime(t) && cudaIsCompiledIn()) {
@@ -412,8 +524,11 @@ void DespillITPlugin::render(const OFX::RenderArguments& args)
         ri.protect = protect ? &rProt : nullptr;
         ri.mask = mask ? &rMask : nullptr;
         std::string err;
-        if (processCUDARows(p, ri, wOut, err)) return;
+        if (prof) cudaSetProfiling(true);
+        if (processCUDARows(p, ri, wOut, err)) { path = "GPU"; report(w, h); return; }
         OFX::Log::warning(true, "despill_IT_OFX: GPU render failed (%s), falling back to CPU", err.c_str());
+        std::fprintf(stderr, "despill_IT_OFX: GPU render failed (%s), falling back to CPU\n", err.c_str());
+        path = "CPU (GPU failed: " + err + ")";
     }
 
     // ---- CPU
@@ -439,9 +554,236 @@ void DespillITPlugin::render(const OFX::RenderArguments& args)
     in.mask = mask ? maskBuf.data() : nullptr;
     processCPU(p, in, outBuf.data());
     parallelRanges(h, [&](int r0, int r1) { writeRows(dst.get(), win, r0, r1, &outBuf[4 * (size_t)r0 * w]); });
+    report(w, h);
 }
 
 // ================================================================= factory
+// ================================================================== viewer overlay
+// Drawn while the node panel is open (Show Overlay on):
+//   - the screen sample area: drag its corners or its centre; Shift + drag anywhere draws a new
+//     area. On release, Screen Color becomes the average colour of the Source inside it;
+//   - with Spatial on, a distance probe: a solid circle of radius Edge Width and a dashed one of
+//     radius Edge Width + Edge Falloff (drag their handles), fixed at the centre of the format.
+namespace {
+
+template <class P, class... V>
+void setNow(P* p, double t, V... v)
+{
+    if (p->getNumKeys() > 0) p->setValueAtTime(t, v...);
+    else p->setValue(v...);
+}
+
+class DespillOverlay : public OFX::OverlayInteract
+{
+public:
+    DespillOverlay(OfxInteractHandle handle, OFX::ImageEffect* effect) : OFX::OverlayInteract(handle)
+    {
+        _effect = effect;
+        _show = effect->fetchBooleanParam(kParamShowOverlay);
+        _a = effect->fetchDouble2DParam(kParamSampleA);
+        _b = effect->fetchDouble2DParam(kParamSampleB);
+        _trig = effect->fetchIntParam(kParamSampleTrig);
+        _probe = effect->fetchDouble2DParam(kParamProbeOffset);
+        _spatial = effect->fetchBooleanParam(kParamSpatial);
+        _width = effect->fetchDoubleParam(kParamEdgeWidth);
+        _falloff = effect->fetchDoubleParam(kParamEdgeFalloff);
+        _screen = effect->fetchRGBParam(kParamScreenColor);
+        _src = effect->fetchClip(kOfxImageEffectSimpleSourceClipName);
+        for (OFX::Param* q : std::initializer_list<OFX::Param*>{ _show, _a, _b, _probe, _spatial, _width, _falloff, _screen })
+            addParamToSlaveTo(q);
+    }
+
+    bool draw(const OFX::DrawArgs& args) override
+    {
+        if (!_show->getValueAtTime(args.time)) return false;
+        const Geo g = geo(args.time);
+        const ovl::Pen pen(args.pixelScale);
+        const ovl::GLState gl;
+        const ovl::Colour base = ovl::baseColour(*this);
+        auto col = [&](Part p) { return _drag == p || _hover == p ? ovl::highlight() : base; };
+
+        // sample area, filled corner swatch with the current screen colour
+        double r, gg, b;
+        _screen->getValueAtTime(args.time, r, gg, b);
+        const double sw = 10.0 * pen.sx, sh = 10.0 * pen.sy;
+        glColor3d(r, gg, b);
+        glBegin(GL_QUADS);
+        glVertex2d(g.x2 + 3 * pen.sx, g.y2 - sh); glVertex2d(g.x2 + 3 * pen.sx + sw, g.y2 - sh);
+        glVertex2d(g.x2 + 3 * pen.sx + sw, g.y2); glVertex2d(g.x2 + 3 * pen.sx, g.y2);
+        glEnd();
+        const bool rectActive = _drag == kMove || _drag == kNew || (_drag >= kC0 && _drag <= kC3);
+        ovl::rect(pen, rectActive || _hover == kMove ? ovl::highlight() : base, g.x1, g.y1, g.x2, g.y2);
+        const double cxs[4] = { g.x1, g.x2, g.x2, g.x1 }, cys[4] = { g.y1, g.y1, g.y2, g.y2 };
+        for (int k = 0; k < 4; ++k) ovl::handle(pen, col(Part(kC0 + k)), cxs[k], cys[k]);
+        ovl::cross(pen, col(kMove), 0.5 * (g.x1 + g.x2), 0.5 * (g.y1 + g.y2), 5.0);
+
+        // distance probe
+        if (g.spatial) {
+            ovl::circle(pen, col(kWidth), g.px, g.py, g.w * g.par, g.w, 1.5f);
+            ovl::handle(pen, col(kWidth), g.px + g.w * g.par, g.py);
+            ovl::circle(pen, col(kFalloff), g.px, g.py, g.wf * g.par, g.wf, 1.5f, true);
+            ovl::handle(pen, col(kFalloff), g.px + g.wf * g.par, g.py);
+            ovl::cross(pen, base, g.px, g.py);
+        }
+        return true;
+    }
+
+    bool penMotion(const OFX::PenArgs& args) override
+    {
+        if (!_show->getValueAtTime(args.time)) return false;
+        const double x = args.penPosition.x, y = args.penPosition.y, t = args.time;
+        if (_drag == kNone) {
+            const Part h = hit(args);
+            if (h != _hover) { _hover = h; requestRedraw(); }
+            return false;
+        }
+        const Geo g = geo(t);
+        const double fx = (x - g.ox) / g.ex, fy = (y - g.oy) / g.ey;     // fractions of the format
+        const double dfx = (x - _dragX) / g.ex, dfy = (y - _dragY) / g.ey;
+        switch (_drag) {
+        case kMove:
+            setNow(_a, t, _a0x + dfx, _a0y + dfy);
+            setNow(_b, t, _b0x + dfx, _b0y + dfy);
+            break;
+        case kNew:
+            setNow(_b, t, fx, fy);
+            break;
+        case kC0: case kC1: case kC2: case kC3: {
+            // corner k of the normalised rectangle (x1,y1),(x2,y1),(x2,y2),(x1,y2)
+            double ax, ay, bx, by;
+            _a->getValueAtTime(t, ax, ay);
+            _b->getValueAtTime(t, bx, by);
+            double x1 = std::min(ax, bx), x2 = std::max(ax, bx), y1 = std::min(ay, by), y2 = std::max(ay, by);
+            const int k = _drag - kC0;
+            if (k == 0 || k == 3) x1 = fx; else x2 = fx;
+            if (k == 0 || k == 1) y1 = fy; else y2 = fy;
+            setNow(_a, t, x1, y1);
+            setNow(_b, t, x2, y2);
+            break;
+        }
+        case kWidth: case kFalloff: {
+            const double dx = (x - g.px) / g.par, dy = y - g.py, d = std::sqrt(dx * dx + dy * dy);
+            if (_drag == kWidth) setNow(_width, t, d);
+            else setNow(_falloff, t, std::max(0.0, d - g.w));
+            break;
+        }
+        default: break;
+        }
+        requestRedraw();
+        return true;
+    }
+
+    bool penDown(const OFX::PenArgs& args) override
+    {
+        if (!_show->getValueAtTime(args.time)) return false;
+        const double t = args.time;
+        _drag = hit(args);
+        if (_drag == kNone && _shift) _drag = kNew;
+        if (_drag == kNone) return false;
+        _dragX = args.penPosition.x; _dragY = args.penPosition.y;
+        _a->getValueAtTime(t, _a0x, _a0y);
+        _b->getValueAtTime(t, _b0x, _b0y);
+        _probe->getValueAtTime(t, _p0x, _p0y);
+        if (_drag == kNew) {
+            const Geo g = geo(t);
+            const double fx = (_dragX - g.ox) / g.ex, fy = (_dragY - g.oy) / g.ey;
+            setNow(_a, t, fx, fy);
+            setNow(_b, t, fx, fy);
+        }
+        requestRedraw();
+        return true;
+    }
+
+    bool penUp(const OFX::PenArgs& args) override
+    {
+        if (_drag == kNone) return false;
+        const bool sample = _drag == kMove || _drag == kNew || (_drag >= kC0 && _drag <= kC3);
+        _drag = kNone;
+        if (sample) {
+            // normalise the corners, then ask the effect to sample (changedParam)
+            double ax, ay, bx, by;
+            _a->getValueAtTime(args.time, ax, ay);
+            _b->getValueAtTime(args.time, bx, by);
+            setNow(_a, args.time, std::min(ax, bx), std::min(ay, by));
+            setNow(_b, args.time, std::max(ax, bx), std::max(ay, by));
+            _trig->setValue(_trig->getValue() + 1);
+        }
+        requestRedraw();
+        return true;
+    }
+
+    bool keyDown(const OFX::KeyArgs& args) override
+    {
+        if (args.keySymbol == kOfxKey_Shift_L || args.keySymbol == kOfxKey_Shift_R) _shift = true;
+        return false;
+    }
+    bool keyUp(const OFX::KeyArgs& args) override
+    {
+        if (args.keySymbol == kOfxKey_Shift_L || args.keySymbol == kOfxKey_Shift_R) _shift = false;
+        return false;
+    }
+    void loseFocus(const OFX::FocusArgs&) override { _shift = false; }
+
+private:
+    enum Part { kNone, kMove, kNew, kC0, kC1, kC2, kC3, kProbe, kWidth, kFalloff };
+    struct Geo {
+        double ox, oy, ex, ey, par;          // format origin and size (canonical), pixel aspect
+        double x1, y1, x2, y2;               // sample area (canonical)
+        double px, py, w, wf;                // probe centre (canonical), radii in pixels
+        bool spatial;
+    };
+
+    Geo geo(double t) const
+    {
+        Geo g;
+        const OfxPointD off = _effect->getProjectOffset(), ext = _effect->getProjectExtent();
+        g.ox = off.x; g.oy = off.y; g.ex = ext.x > 0 ? ext.x : 1.0; g.ey = ext.y > 0 ? ext.y : 1.0;
+        g.par = _src->isConnected() ? _src->getPixelAspectRatio() : 1.0;
+        if (!(g.par > 0.0)) g.par = 1.0;
+        double ax, ay, bx, by;
+        _a->getValueAtTime(t, ax, ay);
+        _b->getValueAtTime(t, bx, by);
+        g.x1 = g.ox + std::min(ax, bx) * g.ex; g.x2 = g.ox + std::max(ax, bx) * g.ex;
+        g.y1 = g.oy + std::min(ay, by) * g.ey; g.y2 = g.oy + std::max(ay, by) * g.ey;
+        g.px = g.ox + 0.5 * g.ex; g.py = g.oy + 0.5 * g.ey;      // fixed at the centre of the format
+        g.w = std::max(0.0, _width->getValueAtTime(t));
+        g.wf = g.w + std::max(0.0, _falloff->getValueAtTime(t));
+        g.spatial = _spatial->getValueAtTime(t);
+        return g;
+    }
+
+    Part hit(const OFX::PenArgs& args) const
+    {
+        const Geo g = geo(args.time);
+        const ovl::Pen pen(args.pixelScale);
+        const double x = args.penPosition.x, y = args.penPosition.y, r = pen.hitRadius();
+        if (g.spatial) {
+            if (pen.screenDist(x, y, g.px + g.wf * g.par, g.py) < r) return kFalloff;
+            if (pen.screenDist(x, y, g.px + g.w * g.par, g.py) < r) return kWidth;
+        }
+        const double cxs[4] = { g.x1, g.x2, g.x2, g.x1 }, cys[4] = { g.y1, g.y1, g.y2, g.y2 };
+        for (int k = 0; k < 4; ++k)
+            if (pen.screenDist(x, y, cxs[k], cys[k]) < r) return Part(kC0 + k);
+        if (pen.screenDist(x, y, 0.5 * (g.x1 + g.x2), 0.5 * (g.y1 + g.y2)) < r) return kMove;
+        return kNone;
+    }
+
+    OFX::BooleanParam* _show;
+    OFX::Double2DParam *_a, *_b, *_probe;
+    OFX::IntParam* _trig;
+    OFX::BooleanParam* _spatial;
+    OFX::DoubleParam *_width, *_falloff;
+    OFX::RGBParam* _screen;
+    OFX::Clip* _src;
+    Part _drag = kNone, _hover = kNone;
+    bool _shift = false;
+    double _dragX = 0, _dragY = 0, _a0x = 0, _a0y = 0, _b0x = 0, _b0y = 0, _p0x = 0, _p0y = 0;
+};
+
+class DespillOverlayDescriptor : public OFX::DefaultEffectOverlayDescriptor<DespillOverlayDescriptor, DespillOverlay> {};
+
+} // namespace
+
 mDeclarePluginFactory(DespillITFactory, {}, ;);
 
 void DespillITFactory::unload() { cudaReleaseResources(); }
@@ -461,6 +803,7 @@ void DespillITFactory::describe(OFX::ImageEffectDescriptor& desc)
     desc.setRenderTwiceAlways(false);
     desc.setSupportsMultipleClipPARs(false);
     desc.setRenderThreadSafety(OFX::eRenderFullySafe);
+    desc.setOverlayInteractDescriptor(new DespillOverlayDescriptor);
 }
 
 namespace {
@@ -562,6 +905,29 @@ void DespillITFactory::describeInContext(OFX::ImageEffectDescriptor& desc, OFX::
         c->setDefault(0.08, 0.45, 0.12);
         c->setDisplayRange(0, 0, 0, 1, 1, 1);
         page->addChild(*c);
+        OFX::PushButtonParamDescriptor* sb = desc.definePushButtonParam(kParamSample);
+        sb->setLabels("Sample Screen", "Sample Screen", "Sample Screen");
+        sb->setHint("Sets Screen Color to the average colour of the Source inside the sample area drawn in the viewer "
+                    "(move its corners, or Shift + drag to draw a new one: the colour is sampled on release).");
+        page->addChild(*sb);
+        for (const char* n : { kParamSampleA, kParamSampleB }) {
+            OFX::Double2DParamDescriptor* d2 = desc.defineDouble2DParam(n);
+            d2->setLabels(n, n, n);
+            d2->setDoubleType(OFX::eDoubleTypePlain);
+            d2->setDefault(n == kParamSampleA ? 0.05 : 0.15, n == kParamSampleA ? 0.80 : 0.90);
+            d2->setEvaluateOnChange(false);
+            d2->setAnimates(false);
+            d2->setIsSecret(true);
+            page->addChild(*d2);
+        }
+        OFX::IntParamDescriptor* tr = desc.defineIntParam(kParamSampleTrig);
+        tr->setLabels(kParamSampleTrig, kParamSampleTrig, kParamSampleTrig);
+        tr->setDefault(0);
+        tr->setEvaluateOnChange(false);
+        tr->setAnimates(false);
+        tr->setIsPersistant(false);
+        tr->setIsSecret(true);
+        page->addChild(*tr);
     }
     choice(desc, page, kParamScreenSource, "Screen Source",
            "Screen colour each pixel is compared to.\n"
@@ -649,7 +1015,25 @@ void DespillITFactory::describeInContext(OFX::ImageEffectDescriptor& desc, OFX::
            { "Result", "Spill Map", "Strength", "Key", "Local Screen", "Core Colour" }, kOutResult);
     choice(desc, page, kParamAlphaOut, "Alpha Output", "Alpha of the result.", { "Source Alpha", "Key", "Spill Map" }, kAlphaSource);
     boolean(desc, page, kParamInvertMask, "Invert Mask", "Inverts the Mask input.", false);
-    dbl(desc, page, kParamMix, "Mix", "Effect mix.", 1, 0, 1, 0, 1);
+    divider(dbl(desc, page, kParamMix, "Mix", "Effect mix.", 1, 0, 1, 0, 1));
+
+    // ---- viewer
+    {
+        OFX::BooleanParamDescriptor* b = boolean(desc, page, kParamShowOverlay, "Show Overlay",
+            "Shows the viewer widgets while the panel is open: the screen sample area (see Sample Screen) and, with "
+            "Spatial on, a probe at the centre of the format with circles of radius Edge Width and Edge Width + "
+            "Edge Falloff (drag their handles to change them).", true);
+        b->setEvaluateOnChange(false);
+        b->setAnimates(false);
+        OFX::Double2DParamDescriptor* o = desc.defineDouble2DParam(kParamProbeOffset);
+        o->setLabels("Probe Offset", "Probe Offset", "Probe Offset");
+        o->setDoubleType(OFX::eDoubleTypePlain);
+        o->setDefault(0, 0);
+        o->setEvaluateOnChange(false);
+        o->setAnimates(false);
+        o->setIsSecret(true);
+        page->addChild(*o);
+    }
 }
 
 OFX::ImageEffect* DespillITFactory::createInstance(OfxImageEffectHandle handle, OFX::ContextEnum)

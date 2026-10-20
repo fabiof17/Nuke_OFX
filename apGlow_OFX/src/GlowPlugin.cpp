@@ -1,29 +1,31 @@
 // GlowPlugin.cpp
-// OFX front-end of expo_GLOW_OFX: exponential glow made of many blurs whose
+// OFX front-end of apGlow_OFX: exponential glow made of many blurs whose
 // sizes grow geometrically up to "max size", summed with a progressive colour
 // gain ("persistence"). CPU and optional CUDA back-ends.
 //
 // Inputs : Source, Area (optional, emitting zone), Mask (optional)
 #include "ofxsImageEffect.h"
+#include "OverlayGL.h"
 #include "ofxsLog.h"
 
 #include "GlowCore.h"
 
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 #include <memory>
 #include <string>
 #include <thread>
 #include <vector>
 
-#define kPluginName          "expo_GLOW_OFX"
+#define kPluginName          "apGlow_OFX"
 #define kPluginGrouping      "Filter"
-#define kPluginIdentifier    "fr.expoglow.expo_GLOW_OFX"
+#define kPluginIdentifier    "fr.expoglow.expo_GLOW_OFX"   // unchanged since expo_GLOW_OFX: existing Nuke scripts still load
 #define kPluginVersionMajor  1
 #define kPluginVersionMinor  0
 
 #define kPluginDescription \
-    "expo_GLOW_OFX: exponential glow.\n\n" \
+    "apGlow_OFX: exponential glow.\n\n" \
     "Sum of several blurs whose size grows geometrically up to Max Size, " \
     "with a progressive colour gain (Persistence) from the smallest to the largest.\n" \
     "Area input: limits the area that emits the glow. Mask input: limits the final effect.\n\n" \
@@ -54,6 +56,8 @@ static const char* kParamEnableOverscan = "enableOverscan";
 static const char* kParamInvertArea     = "invertArea";
 static const char* kParamInvertMask     = "invertMask";
 static const char* kParamMix            = "mix";
+static const char* kParamShowOverlay    = "showOverlay";
+static const char* kParamOverlayOffset  = "overlayOffset";
 
 // Layout hint (host extension, not in the base OFX headers): keep next param on the same line.
 static const char* kPropLayoutHint = "OfxParamPropLayoutHint";
@@ -132,6 +136,7 @@ void imageToRGBA(const OFX::Image* img, const OfxRectI& rect, std::vector<float>
         const float* px = static_cast<const float*>(img->getPixelAddress(x1, y));
         if (!px) return;
         float* o = &out[4 * ((size_t)(y - rect.y1) * w + (x1 - rect.x1))];
+        if (nc == 4) { std::memcpy(o, px, sizeof(float) * 4 * (size_t)(x2 - x1)); return; }
         for (int x = x1; x < x2; ++x, px += nc, o += 4) readPx(px, o);
     });
 }
@@ -189,6 +194,12 @@ void readRows(const OFX::Image* img, const OfxRectI& rect, int r0, int r1, bool 
             int sy = y;
             if (repeatEdges) sy = std::min(std::max(y, bd.y1), bd.y2 - 1);
             if (sy >= bd.y1 && sy < bd.y2) row = static_cast<const float*>(img->getPixelAddress(bd.x1, sy));
+        }
+        // fast path: RGBA image to RGB rows, the row fully inside the image: tight loop
+        if (!matte && row && nc == 4 && rect.x1 >= bd.x1 && rect.x2 <= bd.x2) {
+            const float* sp = row + (size_t)(rect.x1 - bd.x1) * 4;
+            for (int x = 0; x < w; ++x, sp += 4, o += 3) { o[0] = sp[0]; o[1] = sp[1]; o[2] = sp[2]; }
+            continue;
         }
         for (int x = rect.x1; x < rect.x2; ++x, o += stride) {
             int sx = x;
@@ -472,7 +483,7 @@ void ExpoGlowPlugin::render(const OFX::RenderArguments& args)
         std::string err;
         if (computeGlowCUDARows(pp, plan, rSrc, area ? &rArea : nullptr, win.x1 - buf.x1, win.y1 - buf.y1, ww, wh, wGlow, err))
             return;
-        OFX::Log::warning(true, "expo_GLOW_OFX: GPU render failed (%s), falling back to CPU", err.c_str());
+        OFX::Log::warning(true, "apGlow_OFX: GPU render failed (%s), falling back to CPU", err.c_str());
     }
 
     // ---- CPU
@@ -487,6 +498,140 @@ void ExpoGlowPlugin::render(const OFX::RenderArguments& args)
 }
 
 // ================================================================= factory
+// ================================================================== viewer overlay
+// Drawn while the node panel is open (Show Overlay on): one circle per glow step (diameter =
+// blur size of the step, Size Scale included), the largest one solid. Drag its handle to set
+// Max Size. The widget stays at the centre of the format.
+namespace {
+
+template <class P, class... V>
+void setNow(P* p, double t, V... v)
+{
+    if (p->getNumKeys() > 0) p->setValueAtTime(t, v...);
+    else p->setValue(v...);
+}
+
+class GlowOverlay : public OFX::OverlayInteract
+{
+public:
+    GlowOverlay(OfxInteractHandle handle, OFX::ImageEffect* effect) : OFX::OverlayInteract(handle)
+    {
+        _effect = effect;
+        _show = effect->fetchBooleanParam(kParamShowOverlay);
+        _offset = effect->fetchDouble2DParam(kParamOverlayOffset);
+        _maxSize = effect->fetchDoubleParam(kParamMaxSize);
+        _falloff = effect->fetchDoubleParam(kParamSizeFalloff);
+        _steps = effect->fetchIntParam(kParamSteps);
+        _scale = effect->fetchDoubleParam(kParamSizeScale);
+        _src = effect->fetchClip(kOfxImageEffectSimpleSourceClipName);
+        for (OFX::Param* q : std::initializer_list<OFX::Param*>{ _show, _offset, _maxSize, _falloff, _steps, _scale })
+            addParamToSlaveTo(q);
+    }
+
+    bool draw(const OFX::DrawArgs& args) override
+    {
+        if (!_show->getValueAtTime(args.time)) return false;
+        const double t = args.time;
+        double cx, cy, par;
+        centre(t, cx, cy, par);
+        const ovl::Pen pen(args.pixelScale);
+        const ovl::GLState gl;
+        const ovl::Colour base = ovl::baseColour(*this);
+        GlowSettings g;
+        g.maxSize = (float)_maxSize->getValueAtTime(t);
+        g.sizeFalloff = (float)_falloff->getValueAtTime(t);
+        g.steps = std::max(1, _steps->getValueAtTime(t));
+        g.sizeScale = (float)_scale->getValueAtTime(t);
+        g.renderScale = 1.f;
+        for (int i = 1; i < g.steps; ++i) {
+            const double r = 0.5 * stepSize(g, i);
+            ovl::circle(pen, base, cx, cy, r * par, r, 1.f, true);
+        }
+        const double R = 0.5 * stepSize(g, g.steps);
+        const ovl::Colour c = _drag == kRadius || _hover == kRadius ? ovl::highlight() : base;
+        ovl::circle(pen, c, cx, cy, R * par, R, 2.f);
+        ovl::handle(pen, c, cx + R * par, cy);
+        ovl::cross(pen, base, cx, cy);
+        return true;
+    }
+
+    bool penMotion(const OFX::PenArgs& args) override
+    {
+        if (!_show->getValueAtTime(args.time)) return false;
+        const double x = args.penPosition.x, y = args.penPosition.y;
+        if (_drag == kNone) {
+            const Part h = hit(args);
+            if (h != _hover) { _hover = h; requestRedraw(); }
+            return false;
+        }
+        {
+            double cx, cy, par;
+            centre(args.time, cx, cy, par);
+            const double dx = (x - cx) / par, dy = y - cy, sc = _scale->getValueAtTime(args.time);
+            if (sc > 1e-6) setNow(_maxSize, args.time, 2.0 * std::sqrt(dx * dx + dy * dy) / sc);
+        }
+        requestRedraw();
+        return true;
+    }
+
+    bool penDown(const OFX::PenArgs& args) override
+    {
+        if (!_show->getValueAtTime(args.time)) return false;
+        _drag = hit(args);
+        if (_drag == kNone) return false;
+        _dragX = args.penPosition.x; _dragY = args.penPosition.y;
+        _offset->getValueAtTime(args.time, _dragOffX, _dragOffY);
+        requestRedraw();
+        return true;
+    }
+
+    bool penUp(const OFX::PenArgs&) override
+    {
+        if (_drag == kNone) return false;
+        _drag = kNone;
+        requestRedraw();
+        return true;
+    }
+
+private:
+    enum Part { kNone, kCentre, kRadius };
+
+    void centre(double t, double& cx, double& cy, double& par) const
+    {
+        const OfxPointD off = _effect->getProjectOffset(), ext = _effect->getProjectExtent();
+        (void)t;                                     // fixed at the centre of the format
+        cx = off.x + 0.5 * ext.x;
+        cy = off.y + 0.5 * ext.y;
+        par = _src->isConnected() ? _src->getPixelAspectRatio() : 1.0;
+        if (!(par > 0.0)) par = 1.0;
+    }
+
+    Part hit(const OFX::PenArgs& args) const
+    {
+        const double t = args.time, x = args.penPosition.x, y = args.penPosition.y;
+        double cx, cy, par;
+        centre(t, cx, cy, par);
+        const ovl::Pen pen(args.pixelScale);
+        const double R = 0.5 * _maxSize->getValueAtTime(t) * _scale->getValueAtTime(t);
+        if (pen.screenDist(x, y, cx + R * par, cy) < pen.hitRadius()) return kRadius;
+        return kNone;
+    }
+
+    OFX::BooleanParam* _show;
+    OFX::Double2DParam* _offset;
+    OFX::DoubleParam* _maxSize;
+    OFX::DoubleParam* _falloff;
+    OFX::IntParam* _steps;
+    OFX::DoubleParam* _scale;
+    OFX::Clip* _src;
+    Part _drag = kNone, _hover = kNone;
+    double _dragX = 0, _dragY = 0, _dragOffX = 0, _dragOffY = 0;
+};
+
+class GlowOverlayDescriptor : public OFX::DefaultEffectOverlayDescriptor<GlowOverlayDescriptor, GlowOverlay> {};
+
+} // namespace
+
 mDeclarePluginFactory(ExpoGlowFactory, {}, ;);
 
 void ExpoGlowFactory::unload() { cudaReleaseResources(); }
@@ -506,6 +651,7 @@ void ExpoGlowFactory::describe(OFX::ImageEffectDescriptor& desc)
     desc.setRenderTwiceAlways(false);
     desc.setSupportsMultipleClipPARs(false);
     desc.setRenderThreadSafety(OFX::eRenderFullySafe);
+    desc.setOverlayInteractDescriptor(new GlowOverlayDescriptor);
 }
 
 namespace {
@@ -662,6 +808,25 @@ void ExpoGlowFactory::describeInContext(OFX::ImageEffectDescriptor& desc, OFX::C
     boolean(desc, page, nullptr, kParamInvertArea, "Invert Area", "Inverts the Area input (area that emits the glow).", false);
     boolean(desc, page, nullptr, kParamInvertMask, "Invert Mask", "Inverts the Mask input.", false);
     divider(dbl(desc, page, nullptr, kParamMix, "Mix", "Effect mix.", 1, 0, 1, 0, 1));
+
+    // ---- viewer
+    {
+        OFX::BooleanParamDescriptor* b = boolean(desc, page, nullptr, kParamShowOverlay, "Show Overlay",
+            "Shows the glow sizes in the viewer while the panel is open: one circle per step, the largest one "
+            "solid (drag its handle to set Max Size). The widget stays at the centre of the format.", true);
+        b->setEvaluateOnChange(false);
+        b->setAnimates(false);
+        OFX::Double2DParamDescriptor* o = desc.defineDouble2DParam(kParamOverlayOffset);
+        o->setLabels("Overlay Offset", "Overlay Offset", "Overlay Offset");
+        o->setHint("Position of the viewer widget, relative to the centre of the format.");
+        o->setDefault(0, 0);
+        o->setDoubleType(OFX::eDoubleTypePlain);
+        o->setEvaluateOnChange(false);
+        o->setAnimates(false);
+        o->setIsSecret(true);
+        page->addChild(*o);
+        divider(b);
+    }
 
     // ---- credits, at the bottom of the panel under a separator
     {

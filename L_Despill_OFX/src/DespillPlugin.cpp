@@ -143,6 +143,16 @@ void readRows(const OFX::Image* img, const OfxRectI& rect, int r0, int r1, bool 
             const int sy = repeatEdges ? std::min(std::max(y, bd.y1), bd.y2 - 1) : y;
             if (sy >= bd.y1 && sy < bd.y2) row = static_cast<const float*>(img->getPixelAddress(bd.x1, sy));
         }
+        // fast paths: RGBA image, row fully inside the image: plain copy (RGBA) or tight loop (RGB)
+        if (row && nc == 4 && rect.x1 >= bd.x1 && rect.x2 <= bd.x2 && (mode == kRowRGBA || mode == kRowRGB)) {
+            const float* s = row + (size_t)(rect.x1 - bd.x1) * 4;
+            if (mode == kRowRGBA) {
+                std::memcpy(o, s, sizeof(float) * 4 * (size_t)w);
+            } else {
+                for (int x = 0; x < w; ++x, s += 4, o += 3) { o[0] = s[0]; o[1] = s[1]; o[2] = s[2]; }
+            }
+            continue;
+        }
         for (int x = rect.x1; x < rect.x2; ++x, o += stride) {
             const int sx = repeatEdges ? std::min(std::max(x, bd.x1), bd.x2 - 1) : x;
             put(row && sx >= bd.x1 && sx < bd.x2 ? row + (size_t)(sx - bd.x1) * nc : nullptr, o);

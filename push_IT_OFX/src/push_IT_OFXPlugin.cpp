@@ -6,6 +6,7 @@
 //          Vector Warp (directional spread along a vector input or a fixed angle)
 // Modes  : Expand (push colours out of the matte) / Contract (fill the matte from outside)
 #include "ofxsImageEffect.h"
+#include "OverlayGL.h"
 #include "ofxsMultiThread.h"
 #include "ofxsLog.h"
 
@@ -68,6 +69,8 @@ static const char* kParamPremultOutput   = "premultiplyOutput";
 static const char* kParamExtendToFormat  = "extendToFormat";
 static const char* kParamUseGPU          = "useGPU";
 static const char* kParamGPUStatus       = "gpuStatus";
+static const char* kParamShowOverlay     = "showOverlay";
+static const char* kParamOverlayOffset   = "overlayOffset";
 
 // Layout hint (host extension, not in the base OFX headers).
 static const char* kPropLayoutHint = "OfxParamPropLayoutHint";
@@ -138,20 +141,21 @@ void parallelRanges(int n, F&& f)
 void readRowsRGBA(const OFX::Image* img, const OfxRectI& win, int r0, int r1, float* out)
 {
     const int w = win.x2 - win.x1;
-    std::memset(out, 0, sizeof(float) * 4 * (size_t)w * (r1 - r0));
-    if (!img) return;
-    const OFX::PixelComponentEnum comps = img->getPixelComponents();
-    const int nc = componentCount(comps);
-    if (nc == 0) return;
-    const OfxRectI bd = img->getBounds();
+    const size_t rowFloats = 4 * (size_t)w;
+    const OFX::PixelComponentEnum comps = img ? img->getPixelComponents() : OFX::ePixelComponentNone;
+    const int nc = img ? componentCount(comps) : 0;
+    const OfxRectI bd = img ? img->getBounds() : OfxRectI{ 0, 0, 0, 0 };
     const int x1 = std::max(win.x1, bd.x1), x2 = std::min(win.x2, bd.x2);
-    if (x1 >= x2) return;
     for (int r = r0; r < r1; ++r) {
+        float* rowOut = out + (size_t)(r - r0) * rowFloats;
         const int y = win.y1 + r;
-        if (y < bd.y1 || y >= bd.y2) continue;
-        const float* px = static_cast<const float*>(img->getPixelAddress(x1, y));
-        if (!px) continue;
-        float* o = out + 4 * ((size_t)(r - r0) * w + (x1 - win.x1));
+        const float* px = nc && x1 < x2 && y >= bd.y1 && y < bd.y2
+                              ? static_cast<const float*>(img->getPixelAddress(x1, y)) : nullptr;
+        // zeros only where the image does not cover the row (no full clear of the buffer)
+        if (!px) { std::memset(rowOut, 0, sizeof(float) * rowFloats); continue; }
+        if (x1 > win.x1) std::memset(rowOut, 0, sizeof(float) * 4 * (size_t)(x1 - win.x1));
+        if (x2 < win.x2) std::memset(rowOut + 4 * (size_t)(x2 - win.x1), 0, sizeof(float) * 4 * (size_t)(win.x2 - x2));
+        float* o = rowOut + 4 * (size_t)(x1 - win.x1);
         if (nc == 4) { std::memcpy(o, px, sizeof(float) * 4 * (size_t)(x2 - x1)); continue; }
         for (int x = x1; x < x2; ++x, px += nc, o += 4) readPixel(px, comps, o);
     }
@@ -452,6 +456,156 @@ void push_IT_OFXPlugin::render(const OFX::RenderArguments& args)
 }
 
 // ================================================================= factory
+// ================================================================== viewer overlay
+// Drawn while the node panel is open (Show Overlay on):
+//   - a centre cross, draggable, where the widgets are anchored (format centre + offset);
+//   - Vector Warp with a constant vector: an arrow showing Angle and Length; drag its tip;
+//   - Max Distance > 0: a dashed circle of that radius; drag its handle to change it.
+namespace {
+
+template <class P, class... V>
+void setNow(P* p, double t, V... v)
+{
+    if (p->getNumKeys() > 0) p->setValueAtTime(t, v...);
+    else p->setValue(v...);
+}
+
+class PushOverlay : public OFX::OverlayInteract
+{
+public:
+    PushOverlay(OfxInteractHandle handle, OFX::ImageEffect* effect) : OFX::OverlayInteract(handle)
+    {
+        _effect = effect;
+        _show = effect->fetchBooleanParam(kParamShowOverlay);
+        _offset = effect->fetchDouble2DParam(kParamOverlayOffset);
+        _type = effect->fetchChoiceParam(kParamSpreadType);
+        _source = effect->fetchChoiceParam(kParamVectorSource);
+        _angle = effect->fetchDoubleParam(kParamAngle);
+        _length = effect->fetchDoubleParam(kParamLength);
+        _invert = effect->fetchBooleanParam(kParamInvertDirection);
+        _maxDist = effect->fetchDoubleParam(kParamMaxDistance);
+        _src = effect->fetchClip(kOfxImageEffectSimpleSourceClipName);
+        for (OFX::Param* q : std::initializer_list<OFX::Param*>{ _show, _offset, _type, _source, _angle, _length, _invert, _maxDist })
+            addParamToSlaveTo(q);
+    }
+
+    bool draw(const OFX::DrawArgs& args) override
+    {
+        if (!_show->getValueAtTime(args.time)) return false;
+        const State st = state(args.time);
+        const ovl::Pen pen(args.pixelScale);
+        const ovl::GLState gl;
+        const ovl::Colour base = ovl::baseColour(*this);
+        auto col = [&](Part p) { return _drag == p || _hover == p ? ovl::highlight() : base; };
+        if (st.maxDist > 0.0) {
+            ovl::circle(pen, col(kRadius), st.cx, st.cy, st.maxDist * st.par, st.maxDist, 1.5f, true);
+            ovl::handle(pen, col(kRadius), st.cx + st.maxDist * st.par, st.cy);
+        }
+        if (st.arrow) {
+            ovl::arrow(pen, col(kTip), st.cx, st.cy, st.tx, st.ty);
+            ovl::handle(pen, col(kTip), st.tx, st.ty);
+        }
+        ovl::cross(pen, col(kCentre), st.cx, st.cy);
+        return true;
+    }
+
+    bool penMotion(const OFX::PenArgs& args) override
+    {
+        if (!_show->getValueAtTime(args.time)) return false;
+        const double x = args.penPosition.x, y = args.penPosition.y;
+        const State st = state(args.time);
+        if (_drag == kNone) {
+            const Part h = hit(st, ovl::Pen(args.pixelScale), x, y);
+            if (h != _hover) { _hover = h; requestRedraw(); }
+            return false;
+        }
+        if (_drag == kCentre) {
+            setNow(_offset, args.time, _dragOffX + (x - _dragX), _dragOffY + (y - _dragY));
+        } else if (_drag == kTip) {
+            double vx = (x - st.cx) / st.par, vy = y - st.cy;
+            if (_invert->getValueAtTime(args.time)) { vx = -vx; vy = -vy; }
+            setNow(_length, args.time, std::sqrt(vx * vx + vy * vy));
+            setNow(_angle, args.time, std::atan2(vy, vx) * 180.0 / 3.14159265358979323846);
+        } else if (_drag == kRadius) {
+            const double dx = (x - st.cx) / st.par, dy = y - st.cy;
+            setNow(_maxDist, args.time, std::sqrt(dx * dx + dy * dy));
+        }
+        requestRedraw();
+        return true;
+    }
+
+    bool penDown(const OFX::PenArgs& args) override
+    {
+        if (!_show->getValueAtTime(args.time)) return false;
+        const State st = state(args.time);
+        _drag = hit(st, ovl::Pen(args.pixelScale), args.penPosition.x, args.penPosition.y);
+        if (_drag == kNone) return false;
+        _dragX = args.penPosition.x; _dragY = args.penPosition.y;
+        _offset->getValueAtTime(args.time, _dragOffX, _dragOffY);
+        requestRedraw();
+        return true;
+    }
+
+    bool penUp(const OFX::PenArgs&) override
+    {
+        if (_drag == kNone) return false;
+        _drag = kNone;
+        requestRedraw();
+        return true;
+    }
+
+private:
+    enum Part { kNone, kCentre, kTip, kRadius };
+    struct State { double cx, cy, tx, ty, par, maxDist; bool arrow; };
+
+    State state(double t) const
+    {
+        State s;
+        const OfxPointD off = _effect->getProjectOffset(), ext = _effect->getProjectExtent();
+        double ox, oy;
+        _offset->getValueAtTime(t, ox, oy);
+        s.cx = off.x + 0.5 * ext.x + ox;
+        s.cy = off.y + 0.5 * ext.y + oy;
+        s.par = _src->isConnected() ? _src->getPixelAspectRatio() : 1.0;
+        if (!(s.par > 0.0)) s.par = 1.0;
+        int type = 0, source = 0;
+        _type->getValueAtTime(t, type);
+        _source->getValueAtTime(t, source);
+        s.arrow = type == pushit::kTypeVectorWarp && source == pushit::kVectorConstant;
+        const double a = _angle->getValueAtTime(t) * 3.14159265358979323846 / 180.0;
+        const double len = _length->getValueAtTime(t) * (_invert->getValueAtTime(t) ? -1.0 : 1.0);
+        s.tx = s.cx + std::cos(a) * len * s.par;
+        s.ty = s.cy + std::sin(a) * len;
+        s.maxDist = _maxDist->getValueAtTime(t);
+        return s;
+    }
+
+    Part hit(const State& st, const ovl::Pen& pen, double x, double y) const
+    {
+        const double r = pen.hitRadius();
+        if (st.arrow && pen.screenDist(x, y, st.tx, st.ty) < r) return kTip;
+        if (st.maxDist > 0.0 && pen.screenDist(x, y, st.cx + st.maxDist * st.par, st.cy) < r) return kRadius;
+        if (pen.screenDist(x, y, st.cx, st.cy) < r) return kCentre;
+        return kNone;
+    }
+
+    OFX::BooleanParam* _show;
+    OFX::Double2DParam* _offset;
+    OFX::ChoiceParam* _type;
+    OFX::ChoiceParam* _source;
+    OFX::DoubleParam* _angle;
+    OFX::DoubleParam* _length;
+    OFX::BooleanParam* _invert;
+    OFX::DoubleParam* _maxDist;
+    OFX::Clip* _src;
+    Part _drag = kNone, _hover = kNone;
+    double _dragX = 0, _dragY = 0, _dragOffX = 0, _dragOffY = 0;
+};
+
+class PushOverlayDescriptor : public OFX::DefaultEffectOverlayDescriptor<PushOverlayDescriptor, PushOverlay> {};
+
+} // namespace
+
 mDeclarePluginFactory(push_IT_OFXFactory, {}, ;);
 
 void push_IT_OFXFactory::unload()
@@ -476,6 +630,7 @@ void push_IT_OFXFactory::describe(OFX::ImageEffectDescriptor& desc)
     desc.setRenderTwiceAlways(false);
     desc.setSupportsMultipleClipPARs(false);
     desc.setRenderThreadSafety(OFX::eRenderFullySafe);
+    desc.setOverlayInteractDescriptor(new PushOverlayDescriptor);
 }
 
 static OFX::ChoiceParamDescriptor* defineChoice(OFX::ImageEffectDescriptor& desc, OFX::PageParamDescriptor* page,
@@ -637,7 +792,7 @@ void push_IT_OFXFactory::describeInContext(OFX::ImageEffectDescriptor& desc, OFX
 
         defineBool(desc, page, gMatte, kParamInvertMatte, "Invert Matte", "Inverts the matte.", false);
         defineBool(desc, page, gMatte, kParamSourcePremult, "Source Premultiplied",
-            "The source is premultiplied by its alpha: it is unpremultiplied before the spread.", true);
+            "The source is premultiplied by its alpha: it is unpremultiplied before the spread.", false);
         defineDouble(desc, page, gMatte, kParamShrink, "Edge Shrink",
             "Erodes the source area by N pixels to ignore contaminated edges.", 0, 0, 1000, 0, 20);
         last = defineDouble(desc, page, gMatte, kParamEdgeSoftness, "Edge Softness",
@@ -702,8 +857,28 @@ void push_IT_OFXFactory::describeInContext(OFX::ImageEffectDescriptor& desc, OFX
         OFX::BooleanParamDescriptor* legacy = defineBool(desc, page, gOut, kParamPremultOutput, "Premultiply Output",
             "Obsolete: use Result Output = Premult.", false);
         legacy->setIsSecret(true);
-        defineBool(desc, page, gOut, kParamExtendToFormat, "Extend BBox to Format",
+        last = defineBool(desc, page, gOut, kParamExtendToFormat, "Extend BBox to Format",
             "Extends the bounding box to the project format so the spread reaches the image edges.", false);
+    }
+
+    // ---- viewer
+    defineSection(desc, page, last, "sectionViewer", "Viewer");
+    {
+        OFX::BooleanParamDescriptor* b = defineBool(desc, page, nullptr, kParamShowOverlay, "Show Overlay",
+            "Shows the viewer widgets while the panel is open: the Vector Warp arrow (constant vector: drag its tip to "
+            "set Angle and Length) and the Max Distance circle (drag its handle). Drag the centre cross to move them.",
+            true);
+        b->setEvaluateOnChange(false);
+        b->setAnimates(false);
+        OFX::Double2DParamDescriptor* o = desc.defineDouble2DParam(kParamOverlayOffset);
+        o->setLabels("Overlay Offset", "Overlay Offset", "Overlay Offset");
+        o->setHint("Position of the viewer widgets, relative to the centre of the format.");
+        o->setDefault(0, 0);
+        o->setDoubleType(OFX::eDoubleTypePlain);
+        o->setEvaluateOnChange(false);
+        o->setAnimates(false);
+        o->setIsSecret(true);
+        page->addChild(*o);
     }
 
 }

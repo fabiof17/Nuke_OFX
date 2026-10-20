@@ -1,5 +1,5 @@
 // GlowCPU.cpp
-// Multithreaded CPU back-end of expo_GLOW_OFX. Same pipeline as GlowCUDA.cu.
+// Multithreaded CPU back-end of apGlow_OFX. Same pipeline as GlowCUDA.cu.
 #include "GlowCore.h"
 
 #include <cmath>

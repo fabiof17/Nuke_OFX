@@ -10,6 +10,14 @@ set(OPENFX_GIT_TAG "OFX_Release_1.5.1" CACHE STRING "OpenFX tag to download when
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Nuke 14 and older ship their own, older msvcp140.dll, which the plug-in then uses. Code built
+# with Visual Studio 2022 17.10 or newer crashes there as soon as a std::mutex is locked
+# (constexpr mutex constructor, Microsoft STL change). This keeps the old layout: the plug-ins
+# then run with any MSVC runtime, old or new.
+if(MSVC)
+    add_compile_definitions(_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR)
+endif()
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)

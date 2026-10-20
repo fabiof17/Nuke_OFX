@@ -25,6 +25,7 @@ done
 command -v cmake >/dev/null || fail "CMake not found: sudo apt install cmake"
 command -v git   >/dev/null || fail "Git not found: sudo apt install git"
 command -v g++   >/dev/null || fail "g++ not found: sudo apt install build-essential"
+[ -f /usr/include/GL/gl.h ] || fail "OpenGL headers not found (viewer overlay): sudo apt install libgl-dev"
 echo "CMake : $(cmake --version | head -1 | awk '{print $3}')"
 echo "g++   : $(g++ -dumpfullversion)"
 

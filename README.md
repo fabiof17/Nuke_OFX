@@ -5,9 +5,10 @@ A collection of OpenFX plug-ins for The Foundry Nuke, written in C++ with option
 | Plug-in | What it does |
 |---|---|
 | [**push_IT_OFX**](#push_it_ofx) | Edge extend / pixel spread: pushes the colours of a matte outward, or fills a matted area from its surroundings. |
-| [**expo_GLOW_OFX**](#expo_glow_ofx) | Exponential glow: a sum of blurs whose sizes grow geometrically, for a soft and wide light falloff. |
+| [**apGlow_OFX**](#apglow_ofx) | Exponential glow: a sum of blurs whose sizes grow geometrically, for a soft and wide light falloff. |
 | [**L_Despill_OFX**](#l_despill_ofx) | Spill suppression for green, blue and red screens, with spill matte processing, spill replace and background re-light. |
 | [**despill_IT_OFX**](#despill_it_ofx) | Spatially aware despill: local screen colour, despill fading from the edges inwards, protected hues, edge colour rebuilt from the subject, background light and light wrap. |
+| [**MasterKeyer_OFX**](#masterkeyer_ofx) | Complete keyer inspired by the Master Keyer of Autodesk Flame: matte from two screen samples, colour patches, degrain, automatic spill suppression, edge blend and composite. |
 
 The plug-ins run on Windows, Linux and macOS. On Windows and Linux they can render on an NVIDIA GPU with CUDA; when no GPU is available they fall back to a multithreaded CPU renderer automatically. The CPU and GPU renders are identical.
 
@@ -17,9 +18,10 @@ Each plug-in lives in its own folder and is built on its own:
 
 ```
 push_IT_OFX/      edge extend plug-in (sources, CMakeLists.txt, build.bat, build.sh)
-expo_GLOW_OFX/    glow plug-in (sources, CMakeLists.txt, build.bat, build.sh)
+apGlow_OFX/       glow plug-in (sources, CMakeLists.txt, build.bat, build.sh)
 L_Despill_OFX/    classic despill plug-in (sources, CMakeLists.txt, build.bat, build.sh)
 despill_IT_OFX/   spatially aware despill plug-in (sources, CMakeLists.txt, build.bat, build.sh)
+MasterKeyer_OFX/  keyer plug-in (sources, CMakeLists.txt, build.bat, build.sh)
 ofx_bench/        optional stand-alone CPU / GPU benchmark (no Nuke needed)
 ```
 
@@ -58,7 +60,7 @@ Edge extend for compositing, similar to the *Pixel Spread* tool of Autodesk Flam
 **Matte**
 - **Matte Source**: Auto, Source Alpha, Matte Alpha, Matte Luminance.
 - **Invert Matte**.
-- **Source Premultiplied**: in Expand, unpremultiplies the source so that the edges do not darken.
+- **Source Premultiplied** (off by default): turn it on when the source is premultiplied; in Expand, the source is then unpremultiplied so that the edges do not darken.
 - **Edge Shrink**: erodes the kept area by N pixels to skip contaminated edge pixels (very useful in Contract).
 - **Edge Softness**: softens the transition between original and spread pixels.
 
@@ -75,6 +77,12 @@ Edge extend for compositing, similar to the *Pixel Spread* tool of Autodesk Flam
 - **Alpha Output**: Input, Spread Matte (extended matte), Solid.
 - **Extend BBox to Format**: grows the bounding box to the format so that the spread reaches the image borders.
 
+**Viewer**
+- **Show Overlay**: while the node panel is open, the viewer shows:
+  - with *Vector Warp* and a constant vector, an **arrow** for *Angle* and *Length*: drag its tip to set both;
+  - with *Max Distance* > 0, a **dashed circle** of that radius: drag its handle to change it;
+  - a **centre cross** that moves these widgets (they only show sizes and directions, their position does not change the render).
+
 ### Recipes
 
 - **Edge extend before a despill or a merge**: premultiplied plate in Source, Expand, Interpolate, Edge Shrink 1–2, Alpha Output = Input, then premultiply.
@@ -83,11 +91,13 @@ Edge extend for compositing, similar to the *Pixel Spread* tool of Autodesk Flam
 
 ---
 
-## expo_GLOW_OFX
+## apGlow_OFX
 
 Exponential glow built with the multi-blur method: several blurs whose sizes grow geometrically up to *Max Size* are added together, with a colour gain that changes progressively from the smallest blur to the largest. The result imitates the soft, wide falloff of real light diffusion.
 
 This is a C++ / CUDA re-implementation of the **apGlow** gizmo by Adrian Pueyo (apGlow v1.2, [adrianpueyo.com](https://www.adrianpueyo.com), 2015-2022), calibrated to match it.
+
+Formerly named expo_GLOW_OFX. The plug-in identifier has not changed, so Nuke scripts made with expo_GLOW_OFX still load; their existing nodes keep the name they were given.
 
 ### Inputs
 
@@ -128,6 +138,9 @@ This is a C++ / CUDA re-implementation of the **apGlow** gizmo by Adrian Pueyo (
 
 **Area / Mask**
 - **Invert Area**, **Invert Mask**, **Mix**.
+
+**Viewer**
+- **Show Overlay**: while the node panel is open, the viewer shows one circle per glow step (diameter = blur size of the step, *Size Scale* included), the largest one solid. Drag its handle to set *Max Size*. The widget stays at the centre of the format.
 
 As in Nuke, the blurs see the source (and the Area input) with their edge pixels repeated beyond the bounding box, so the glow does not darken near the image borders.
 
@@ -261,6 +274,10 @@ A spatially aware despill. A classic despill (such as L_Despill_OFX) treats ever
 - **Output**: the result, or a view to set up the effect (spill map, despill strength, key, local screen, propagated core colour).
 - **Alpha Output** (source alpha, key, spill map), **Invert Mask**, **Mix**.
 
+**Viewer**
+- **Sample Screen** (under Screen Color) and the **sample area** drawn in the viewer: move its corners or its centre, or Shift + drag anywhere to draw a new area. On release, *Screen Color* becomes the average colour of the Source inside the area; the button samples it again (after a frame change, for instance). A small swatch next to the area shows the current Screen Color.
+- **Show Overlay**: shows the sample area and, with *Spatial* on, a **distance probe**: a solid circle of radius *Edge Width* and a dashed one of radius *Edge Width + Edge Falloff*. It stays at the centre of the format; drag its handles to change the two values.
+
 ### How to use
 
 The defaults come from tests on a synthetic plate. Treat them as starting points to adjust on real plates.
@@ -283,7 +300,7 @@ The node outputs a despilled, unpremultiplied image. Keying and premultiplicatio
 
 **2. Pick the screen colour**
 
-With the **Screen Color** colour picker, sample a clean, evenly lit part of the screen. This is the most important setting: it gives the reference hue and the channel to treat (green or blue).
+Place the **sample area** shown in the viewer on a clean, evenly lit part of the screen (Shift + drag to draw it): Screen Color is set to its average when you release the mouse. The **Screen Color** colour picker works too. This is the most important setting: it gives the reference hue and the channel to treat (green or blue).
 
 Leave **Screen Source** on *From Plate*: the screen colour is then estimated around every pixel, which handles uneven screens. To check it, set **Output** to *Local Screen*: you should see the screen rebuilt behind the subject, with no trace of the subject.
 
@@ -357,11 +374,120 @@ Like every despill that compares colour channels, it detects reflected spill poo
 
 ---
 
+## MasterKeyer_OFX
+
+A complete keyer in one node, inspired by the workflow of the **Master Keyer** of Autodesk Flame: pick the screen, refine the matte, fix problem colours with patches, degrain, and get a despilled, edge-blended foreground composited over the background.
+
+> **Not a copy of Flame.** Autodesk has not published the Master Keyer algorithm. MasterKeyer_OFX is an independent implementation that follows the same workflow and offers similar controls; its maths are its own, and its results differ from Flame's.
+
+How it works:
+
+- **Matte**: each pixel gets the fraction of screen colour it contains: the screen channel against a limit made of the two other channels, compared with the same measure on the screen colour. 1 = as much screen as the screen itself (transparent), 0 = no screen (opaque). The **Secondary** sample and **Mix** set the screen level that must be fully transparent, so that darker parts of the screen are cleaned too. Gain (with its Shadows / Midtones / Highlights corrections), clips, softness, shrink / grow, blur, Garbage and Holdout inputs follow. The matte is computed on the **Key In** input when it is connected (as in Flame), so that a denoised or graded version of the plate can be keyed while the original is kept in the result.
+- **Matte Mode**: the matte above is a *colour-difference* matte (family of Nuke's IBK or Keylight): accurate on semi-transparent edges. The **3D** mode works like Flame's 3D Keyer: every colour is a point of a 3D space (luma, Cb, Cr); the Primary and Secondary samples define a *tolerance volume* that becomes transparent, surrounded by a *softness envelope* where the matte goes from 0 to 1 (Gain and Shadows / Midtones / Highlights widen or narrow it). It isolates any colour precisely and keeps colours far from the screen solid. **Combined** takes the larger of the two mattes: the 3D matte keeps the inside of the subject solid, the difference matte keeps the edges.
+- **Local screen**: optionally, the screen colour is estimated around each pixel from the screen areas of the plate (pixels whose colour is close to the Primary) and interpolated behind the subject, which handles uneven screens.
+- **Patches**: three colour patches force a set of colours to the transparent (Black) or opaque (White) part of the matte, or erode the semi-transparent edges where they are (Edge Analysis). Each patch holds a range of colours that grows with every sample added.
+- **Degrain**: the colour used to compute the matte (not the image itself) is smoothed, so grain and compression noise do not make the matte noisy.
+- **Spill**: automatic colour suppression relative to the screen colour, full at the edges of the subject and fading towards its inside (exact distance to the screen), so that colours close to the screen deep inside the subject are kept. A separate **Spill Colour** changes the suppression without changing the key.
+- **Blend**: over a band inside the edge of the subject, the luma can be lowered or raised and the colour pushed towards a chosen colour or towards the colour of the blurred background, to integrate the edges.
+
+### Inputs
+
+| Input | Role |
+|---|---|
+| **Source** | Green / blue screen plate (Flame's *Front*): used for the result. |
+| **Key In** | Optional. Plate used to compute the matte (Flame's *Key In*), e.g. a denoised or graded version of the Source. Without it, the matte is computed on the Source. |
+| **BG** | Optional. Background: the result is composited over it, and its blurred colour can be used for the edge blend. |
+| **Garbage** | Optional. Matte of areas forced transparent (alpha, or luminance of an RGB image). |
+| **Holdout** | Optional. Matte of areas forced opaque. |
+
+### Parameters
+
+The parameters are split into five tabs. Each section has a **Reset** button, as in Flame.
+
+**Matte**
+- **Use GPU**: renders on the NVIDIA GPU. The detected card is shown on the right.
+- **Output**: Result (foreground over BG; without BG, identical to Premult), Premult (despilled foreground premultiplied by the matte, never composited: merge it later while keeping the BG connected for *From BG*), Source CC (the despilled plate only, without the blend, not premultiplied), Alpha (the matte), Spill (amount removed), Edge (blend region).
+- **Primary**: screen colour, picked on the screen. Its largest component gives the screen channel. As in Flame, the first pick also sets the Secondary and turns Auto CC on, and the Spill Colour follows the Primary until it is changed.
+- **Pick Colour** (next to Primary, Secondary and each patch colour): picks the colour on the **Key In** input if it is connected, else on the **Source** (the Spill Colour is always picked on the Source), never on the keyed output. Press it, then click in the viewer for one pixel, or drag for the average of an area. Press it again or Esc to cancel. **Undo Pick** (Matte and Patches tabs) undoes the last picks, up to 20 (Nuke's Ctrl+Z does not undo the colours a pick sets, because the effect sets them itself after reading the image). These colours are plain r, g, b fields, without Nuke's colour swatch: Nuke's own picker reads the output of the node, which is keyed and premultiplied, so it would give wrong colours here.
+- **Secondary** and **Mix**: second sample, typically on the darkest part of the screen. At Mix 0 only screen as strong as the Primary is fully transparent; at Mix 1 everything at least as "screen" as the Secondary is.
+- **Screen**: Samples (the Primary everywhere) or Local (screen estimated around each pixel; in 3D, the tolerance volume follows it).
+- **Matte Mode**: Difference, 3D or Combined (see above).
+- **Tolerance** (3D): radius of the tolerance volume around the samples (Primary, and Secondary as far as Mix goes).
+- **3D Softness** (3D): width of the softness envelope.
+- **Luma Weight** (3D): weight of the luminance in the colour distance. Lower: lighting changes of the screen matter less.
+- **Show 3D View** and **Corner** (3D, Combined): while the panel is open, a 3D view of the colour space is drawn in a corner of the viewer: the axes (luma × Luma Weight up in white, Cb in blue, Cr in red; dashed: neutral greys), the Primary and Secondary samples in their own colours, the **tolerance volume** (yellow) and the **softness envelope** (cyan, where the matte reaches 1), deformed by Gain and Shadows / Midtones / Highlights. Drag in it to rotate, Shift + drag to zoom, double-click to reset the view; drag the small triangle of its inner corner to resize it. The volumes are cut at the black level (no colour is darker than black), shown as a floor grid. **View Space** chooses the space of the view (display only): *Y Cb Cr*, the space in which the 3D matte measures its distances, or *RGB*, the RGB cube (R, G, B axes from black, greys on the dashed diagonal, the whole cube framed), where the same volumes appear tilted and stretched along the grey diagonal. **Tolerance Display** and **Softness Display** show each volume as a wireframe or as a Gouraud-shaded surface (the envelope is then translucent, so that the tolerance volume stays visible inside it). It follows the settings live (in Local screen mode it shows the volume of the Primary).
+- **Balance** (Difference, Combined): weight between the two other channels when measuring the screen. For a green screen, -1 uses red only, +1 blue only.
+- **Gain**: overall softness of the matte (higher: more transparency).
+- **Shadows**, **Midtones**, **Highlights**: the same softness in the dark, mid and bright parts of the image (by luma, as Flame's matte sliders). Each unit doubles (positive) or halves (negative) the Gain there. The three ranges overlap widely (shadows fade out up to luma 0.6, highlights start from 0.2), so the correction changes progressively.
+- **Clip Black**, **Clip White**, **Softness** (gamma of the semi-transparent values).
+- **Shrink / Grow** (pixels), **Matte Blur** (pixels).
+- **Reset Matte**: resets these parameters; the colours and Mix are kept.
+
+**Patches** (× 3)
+- **Patch n**: turns the patch on (done automatically by the picks).
+- **Type**: Auto (chosen at the first pick: Black where the matte is mostly transparent, White where it is mostly opaque), Black, White or Edge Analysis.
+- **Colour Low** / **Colour High**: range of colours of the patch (lowest and highest r, g, b).
+  - **Pick Colour** replaces it with a sample (click for one pixel, drag for an area: the mean ± 1.5 standard deviations of the area).
+  - **Add Colour** adds a new sample to it (Flame: resample adds, Ctrl+Alt replaces).
+- **Range** (colour distance around these colours fully affected) and **Softness** (fade).
+- **Reset**: patch off, all its parameters back to their defaults.
+
+**Degrain**
+- **Pick Grain**: press, then drag over a flat, grainy area of the plate. The grain size is measured, *Size* is set and Degrain is turned on.
+- **Degrain**: on / off. **Size**: size of the grain. **Edges**: also smooths the luminance (cleaner but softer edges). **More**: doubles the size.
+- **Reset Degrain**: Degrain off, parameters back to their defaults.
+
+**Spill**
+- **Auto CC**: automatic colour suppression (despill), on / off.
+- **Strength**: suppression at the edges of the subject. **Range**: distance (pixels) over which it fades to **Interior** (amount kept deep inside the subject).
+- **Hue**: moves the suppression towards a neighbouring hue (green screen: -1 warmer, +1 cooler).
+- **Spill Colour** (with *Pick Colour*, picked on the Source): colour of the spill to remove. It follows the Primary until it is changed; a different colour changes the suppression, not the key.
+- **Reset Spill**: resets these parameters; the Spill Colour goes back to the Primary.
+
+**Blend**
+- **Edge Size**: width (pixels) of the edge band; 0 = off.
+- **Edge Luma**: darkens or brightens the band. **Edge Balance**: colour shift (only its chroma is used).
+- **From BG**: pushes the band towards the colour of the blurred BG; **BG Blur**: blur of the BG.
+- **Reset** (next to Edge Balance) resets the Edge Balance only; **Reset Blend** resets the other blend parameters.
+
+### How to use
+
+1. Connect the plate to **Source** and, if you have it, the background to **BG** (and, optionally, a denoised or graded plate to **Key In**). Set *Output* to **Alpha**.
+2. Press **Pick Colour** next to *Primary* and drag over a typical part of the screen in the viewer (the average of the area is taken).
+3. If the screen is uneven, either set *Screen* to **Local**, or pick the **Secondary** on the darkest part of the screen and raise **Mix** until the background is black.
+4. Choose the **Matte Mode**: *Difference* for fine edges, *3D* to isolate colours precisely, *Combined* for both (a good start when light colours of the subject turn grey). In 3D, adjust *Tolerance* until the screen is black and *3D Softness* for the edges.
+5. Make the subject solid: if light colours that contain some green (blond hair, yellow, white) are grey in the matte, move **Balance** towards the channel that is high in them (towards -1, red, for warm colours); or lower **Highlights**; then use **Clip White**. Clean the background with **Clip Black**, **Gain** or **Shadows**.
+6. Fix what remains with **Patches**: press *Pick Colour* and drag over a grey area of the matte (the type is chosen automatically), then *Add Colour* for more colours; Edge Analysis for fringes. Use them sparingly: they can make the matte crunchy. **Garbage** / **Holdout** inputs and **Shrink / Grow** complete them.
+7. On a grainy plate, press **Pick Grain** and drag over a flat area, then compare the matte edges (adjust *Size*, *Edges*, *More*).
+8. Set *Output* to **Result** (or **Source CC** to see the despilled plate alone). Adjust **Spill** (lower *Interior* to keep colours close to the screen inside the subject; pick a *Spill Colour* when the spill does not have the hue of the screen).
+9. Integrate the edges with **Blend**: *Edge Size* a few pixels, then *From BG*, *Edge Luma* or *Edge Balance*.
+
+Tests on a synthetic plate (uneven green screen, skin and blond hair, 8-pixel soft edge) give these mean matte errors against the true alpha:
+
+| Settings | Screen | Edges | Skin | Blond hair |
+|---|---|---|---|---|
+| Defaults (Primary only) | 0.091 | 0.138 | 0.000 | 0.221 |
+| Screen = Local | 0.000 | 0.129 | 0.000 | 0.223 |
+| Screen = Local, Balance -0.5 | 0.000 | 0.071 | 0.000 | 0.004 |
+| Same with grain added | 0.011 | 0.083 | 0.000 | 0.011 |
+| Same with grain added and Degrain | 0.000 | 0.075 | 0.000 | 0.005 |
+| Matte Mode 3D, Screen = Local | 0.000 | 0.084 | 0.000 | 0.000 |
+| Matte Mode Combined, Screen = Local | 0.000 | 0.073 | 0.000 | 0.000 |
+
+Like every keyer that measures the screen colour channel by channel, MasterKeyer_OFX makes light colours that contain the screen colour (blond hair against green) partly transparent with neutral settings: *Balance* (or the *Combined* / *3D* matte modes, which keep them solid) is the first setting to adjust for them.
+
+---
+
 ## Performance
 
 Render time per frame, CPU vs GPU, measured with `ofx_bench` (best of 5 runs). GPU times include the host ↔ GPU transfers, as in Nuke. CPU and GPU renders are identical in every test (differences below 1e-5 of the pixel values).
 
-**Test configuration**
+Two test machines:
+
+- **Workstation A** (2010): 2 × Xeon X5675, GeForce RTX 3060 Ti, PCI Express 2.0, DDR3.
+- **Workstation B** (2016): 2 × Xeon E5-2680 v4, RTX A4000, PCI Express 3.0, DDR4.
+
+### Workstation A
 
 | | |
 |---|---|
@@ -381,13 +507,16 @@ Render time per frame, CPU vs GPU, measured with `ofx_bench` (best of 5 runs). G
 | push_IT Vector Warp 300 px | 153 ms | 25.8 ms | ×5.9 |
 | push_IT Contract (Edge Shrink 5, Edge Softness 5) | 131 ms | 24.8 ms | ×5.3 |
 | push_IT Interpolate + Spread Blur 500 | 139 ms | 26.9 ms | ×5.2 |
-| expo_GLOW Max Size 2000, gaussian, 10 steps | 144 ms | 22.8 ms | ×6.3 |
-| expo_GLOW Max Size 2000, box, 10 steps | 104 ms | 21.8 ms | ×4.8 |
-| expo_GLOW Max Size 300, gaussian, 20 steps | 337 ms | 30.1 ms | ×11.2 |
+| apGlow Max Size 2000, gaussian, 10 steps | 144 ms | 22.8 ms | ×6.3 |
+| apGlow Max Size 2000, box, 10 steps | 104 ms | 21.8 ms | ×4.8 |
+| apGlow Max Size 300, gaussian, 20 steps | 337 ms | 30.1 ms | ×11.2 |
 | L_Despill default (log, average) | 31 ms | 20.1 ms | ×1.5 |
 | L_Despill Median 5 + Clean 4 + Matte Blur 20 + BG | 221 ms | 39.5 ms | ×5.6 |
 | despill_IT default | 198 ms | 25.8 ms | ×7.7 |
 | despill_IT + Spill Light (BG) + Light Wrap | 245 ms | 34.3 ms | ×7.1 |
+| MasterKeyer default | 70 ms | 25.6 ms | ×2.7 |
+| MasterKeyer Local screen + Degrain + Shrink + Matte Blur + Blend + BG | 296 ms | 41.9 ms | ×7.1 |
+| MasterKeyer Combined matte + Key In + tone corrections + 3 patches + Spill Colour | 96 ms | 33.8 ms | ×2.8 |
 
 **UHD (3840×2160)**
 
@@ -399,15 +528,87 @@ Render time per frame, CPU vs GPU, measured with `ofx_bench` (best of 5 runs). G
 | push_IT Vector Warp 300 px | 444 ms | 100.8 ms | ×4.4 |
 | push_IT Contract (Edge Shrink 5, Edge Softness 5) | 339 ms | 95.9 ms | ×3.5 |
 | push_IT Interpolate + Spread Blur 500 | 461 ms | 96.6 ms | ×4.8 |
-| expo_GLOW Max Size 2000, gaussian, 10 steps | 620 ms | 89.6 ms | ×6.9 |
-| expo_GLOW Max Size 2000, box, 10 steps | 358 ms | 92.1 ms | ×3.9 |
-| expo_GLOW Max Size 300, gaussian, 20 steps | 1583 ms | 112.9 ms | ×14.0 |
+| apGlow Max Size 2000, gaussian, 10 steps | 620 ms | 89.6 ms | ×6.9 |
+| apGlow Max Size 2000, box, 10 steps | 358 ms | 92.1 ms | ×3.9 |
+| apGlow Max Size 300, gaussian, 20 steps | 1583 ms | 112.9 ms | ×14.0 |
 | L_Despill default (log, average) | 146 ms | 77.9 ms | ×1.9 |
 | L_Despill Median 5 + Clean 4 + Matte Blur 20 + BG | 828 ms | 146.2 ms | ×5.7 |
 | despill_IT default | 606 ms | 93.2 ms | ×6.5 |
 | despill_IT + Spill Light (BG) + Light Wrap | 713 ms | 124.7 ms | ×5.7 |
+| MasterKeyer default | 241 ms | 92.3 ms | ×2.6 |
+| MasterKeyer Local screen + Degrain + Shrink + Matte Blur + Blend + BG | 1370 ms | 150.9 ms | ×9.1 |
+| MasterKeyer Combined matte + Key In + tone corrections + 3 patches + Spill Colour | 344 ms | 125.2 ms | ×2.7 |
 
-The GPU is 1.5 to 14 times faster than the CPU. The gain grows with the cost of the settings (large blurs, Vector Warp, many glow steps), because most of the GPU time is spent moving the image to and from the graphics card: 70 to 95 % in these tests. A simple per-pixel effect such as the default L_Despill gains little; spatial filters (median, blurs, distances, many glow steps) gain the most. This test machine is a 2010-era workstation with PCI Express 2.0: on a recent PC (PCI Express 4.0 or newer, DDR4 / DDR5) the transfers are much faster, so the GPU times should be lower and the speed-ups higher.
+### Workstation B
+
+| | |
+|---|---|
+| CPU | 2 × Intel Xeon E5-2680 v4 @ 2.40 GHz, 28 cores / 56 threads in total (Broadwell) |
+| RAM | 128 GB DDR4 |
+| GPU | NVIDIA RTX A4000, 16 GB |
+| GPU link | PCI Express 3.0, about 12 GB/s host ↔ GPU (page-locked memory) |
+| System | Windows 10, Visual Studio 2026, CUDA Toolkit 13 |
+
+**HD (1920×1080)**
+
+| Test | CPU | GPU | GPU speed-up |
+|---|---|---|---|
+| push_IT Interpolate | 82 ms | 9.3 ms | ×8.8 |
+| push_IT Stretch | 80 ms | 13.4 ms | ×5.9 |
+| push_IT Stretch + Max Distance + Spread Blur 50 | 115 ms | 16.9 ms | ×6.8 |
+| push_IT Vector Warp 300 px | 134 ms | 13.6 ms | ×9.9 |
+| push_IT Contract (Edge Shrink 5, Edge Softness 5) | 118 ms | 11.0 ms | ×10.7 |
+| push_IT Interpolate + Spread Blur 500 | 117 ms | 16.0 ms | ×7.3 |
+| apGlow Max Size 2000, gaussian, 10 steps | 115 ms | 13.1 ms | ×8.8 |
+| apGlow Max Size 2000, box, 10 steps | 95 ms | 12.7 ms | ×7.5 |
+| apGlow Max Size 300, gaussian, 20 steps | 256 ms | 19.3 ms | ×13.2 |
+| L_Despill default (log, average) | 22 ms | 8.5 ms | ×2.6 |
+| L_Despill Median 5 + Clean 4 + Matte Blur 20 + BG | 105 ms | 23.2 ms | ×4.5 |
+| despill_IT default | 224 ms | 13.3 ms | ×16.8 |
+| despill_IT + Spill Light (BG) + Light Wrap | 262 ms | 20.2 ms | ×13.0 |
+| MasterKeyer default | 65 ms | 14.1 ms | ×4.6 |
+| MasterKeyer Local screen + Degrain + Shrink + Matte Blur + Blend + BG | 279 ms | 21.8 ms | ×12.8 |
+| MasterKeyer Combined matte + Key In + tone corrections + 3 patches + Spill Colour | 73 ms | 15.3 ms | ×4.8 |
+
+**UHD (3840×2160)**
+
+| Test | CPU | GPU | GPU speed-up |
+|---|---|---|---|
+| push_IT Interpolate | 201 ms | 34.8 ms | ×5.8 |
+| push_IT Stretch | 203 ms | 40.7 ms | ×5.0 |
+| push_IT Stretch + Max Distance + Spread Blur 50 | 313 ms | 56.6 ms | ×5.5 |
+| push_IT Vector Warp 300 px | 335 ms | 43.0 ms | ×7.8 |
+| push_IT Contract (Edge Shrink 5, Edge Softness 5) | 260 ms | 41.5 ms | ×6.3 |
+| push_IT Interpolate + Spread Blur 500 | 309 ms | 46.6 ms | ×6.6 |
+| apGlow Max Size 2000, gaussian, 10 steps | 295 ms | 49.4 ms | ×6.0 |
+| apGlow Max Size 2000, box, 10 steps | 216 ms | 48.3 ms | ×4.5 |
+| apGlow Max Size 300, gaussian, 20 steps | 606 ms | 77.5 ms | ×7.8 |
+| L_Despill default (log, average) | 67 ms | 29.4 ms | ×2.3 |
+| L_Despill Median 5 + Clean 4 + Matte Blur 20 + BG | 330 ms | 86.5 ms | ×3.8 |
+| despill_IT default | 484 ms | 48.6 ms | ×10.0 |
+| despill_IT + Spill Light (BG) + Light Wrap | 557 ms | 63.7 ms | ×8.8 |
+| MasterKeyer default | 190 ms | 39.5 ms | ×4.8 |
+| MasterKeyer Local screen + Degrain + Shrink + Matte Blur + Blend + BG | 720 ms | 75.1 ms | ×9.6 |
+| MasterKeyer Combined matte + Key In + tone corrections + 3 patches + Spill Colour | 209 ms | 51.2 ms | ×4.1 |
+
+### Summary
+
+The GPU is 1.5 to 14 times faster than the CPU on workstation A, and 2.3 to 17 times faster on workstation B. The gain grows with the cost of the settings (large blurs, distances, Vector Warp, many glow steps). Most of the GPU time is spent moving the image to and from the graphics card: 70 to 95 % on workstation A (PCI Express 2.0, about 3 GB/s in practice), still about 45 to 80 % on workstation B (PCI Express 3.0, about 9 GB/s). The GPU renders are 2 to 3 times faster on workstation B, mostly thanks to the faster bus, while the CPU renders range from slightly slower to 2.5 times faster depending on the effect: more CPU cores help less than a faster bus. A simple per-pixel effect such as the default L_Despill gains little; spatial filters (median, blurs, distances, many glow steps) gain the most. On a PC with PCI Express 4.0 or 5.0, the transfers are faster again.
+
+### Playback in Nuke
+
+`ofx_bench` measures the plug-ins alone. In Nuke, each frame also goes through the Read node (reading and decoding the file), the hand-over of the images between Nuke and the plug-in, and the Viewer. Measured on workstation B with despill_IT_OFX in HD (GPU), without any cache:
+
+| Source | Read alone | Read + despill_IT_OFX |
+|---|---|---|
+| MP4 (H.264) | — | 10–11 fps (decoding: about 56 ms per frame) |
+| EXR, 32-bit float, uncompressed | 14–16 fps | 10–11 fps |
+| EXR, 16-bit half, ZIP (1 scanline) | 19 fps | about 12 fps (estimated) |
+
+- The plug-in itself takes about 16 ms per frame (GPU, transfers included), plus 10 to 15 ms for Nuke to hand the images over: about a third of the frame time. Reading, decoding and displaying the images in Nuke cost more than the effect.
+- **Prefer image sequences to video files**: an MP4 is decoded on the CPU at every frame, and its 4:2:0 chroma also blurs the edges of the screen. **EXR 16-bit half with ZIP (1 scanline) compression** reads faster than uncompressed 32-bit EXR, which needs about 800 MB/s at 24 fps in HD.
+- **For real-time playback**, play the shot once to fill the Viewer cache (green bar of the timeline), or use a Flipbook: the following playbacks run in real time.
+- **Profiling despill_IT_OFX in Nuke**: start Nuke with the environment variable `DESPILLIT_PROFILE=1` (Windows: `set DESPILLIT_PROFILE=1` in a command prompt, then start Nuke from it). Each render writes a line to `%TEMP%\despill_IT_profile.txt` (Linux: `/tmp/despill_IT_profile.txt`): total time, time to fetch the output and the source images, GPU or CPU path, and the time of each GPU stage. Without the variable, nothing is measured.
 
 ---
 
@@ -415,22 +616,23 @@ The GPU is 1.5 to 14 times faster than the CPU. The gain grows with the cost of 
 
 | | Windows 10 / 11 (x64) | Linux (Mint 22 / Ubuntu 24.04, x86-64) | macOS 11+ |
 |---|---|---|---|
-| Compiler | Visual Studio 2022 or 2026 (Community is fine) with the **Desktop development with C++** workload | `build-essential` (g++) | Xcode Command Line Tools |
+| Compiler | Visual Studio 2022 or 2026 (Community is fine) with the **Desktop development with C++** workload | `build-essential` (g++), `libgl-dev` | Xcode Command Line Tools |
 | Build tools | [CMake](https://cmake.org/download/) ≥ 3.20 (tick *Add CMake to the system PATH*) and [Git](https://git-scm.com/download/win) | `cmake`, `git` | CMake ≥ 3.20, Git |
 | GPU (optional) | NVIDIA GPU + [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) 12.x or 13.x | NVIDIA driver 580+ and CUDA Toolkit 13 (NVIDIA repository for Ubuntu 24.04) | not available (CPU only) |
 
 Notes:
 - The OpenFX SDK (`OFX_Release_1.5.1`) is downloaded automatically from GitHub during the first configuration, which is why Git is required.
 - Visual Studio 2026 needs CUDA Toolkit 13.x. The Nsight warnings shown by the CUDA installer about Visual Studio integration can be ignored.
+- **Nuke versions**: tested with Nuke 14 and Nuke 17 on Windows; one build works for all versions. Nuke 14 and older ship their own, older Microsoft C++ runtime (`msvcp140.dll`), which plug-ins built with Visual Studio 2022 17.10 or newer would crash with. The CMake projects define `_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR` on Windows so that the plug-ins work with every Nuke version.
 - The CUDA runtime is linked statically: the plug-ins only need a recent NVIDIA driver on the machine that runs Nuke, no CUDA DLL to ship.
-- On Linux, the C++ runtime is linked statically too: the plug-ins only depend on glibc 2.38 or newer.
+- On Linux, the C++ runtime is linked statically too: the plug-ins only depend on glibc 2.38 or newer and, for push_IT_OFX, apGlow_OFX, despill_IT_OFX and MasterKeyer_OFX, on `libGL.so.1` (viewer overlays), which every machine running Nuke has.
 - Supported GPUs by default: Turing (RTX 20xx), Ampere (RTX 30xx), Ada (RTX 40xx), and Blackwell (RTX 50xx) with CUDA 12.8+, plus PTX for newer cards. For a Pascal card (GTX 10xx), use CUDA 12 and add `61-real` to the architectures (see the CMake options below).
 
 ---
 
 ## Building
 
-Each plug-in is built on its own, from its folder. The commands below use `push_IT_OFX` as an example; replace it with the folder of the plug-in you want to build (e.g. `expo_GLOW_OFX`).
+Each plug-in is built on its own, from its folder. The commands below use `push_IT_OFX` as an example; replace it with the folder of the plug-in you want to build (e.g. `apGlow_OFX`).
 
 ### Windows
 
@@ -450,7 +652,7 @@ Run `build.bat clean` after changing your Visual Studio or CUDA version.
 ### Linux
 
 ```bash
-sudo apt install build-essential cmake git
+sudo apt install build-essential cmake git libgl-dev
 cd push_IT_OFX
 ./build.sh            # CPU + CUDA (if nvcc is found, also in /usr/local/cuda/bin)
 ./build.sh cpu        # CPU only
@@ -467,7 +669,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPUSHIT_WITH_CUDA=OFF \
 cmake --build build -j$(sysctl -n hw.ncpu)
 ```
 
-Each plug-in has its own CUDA option name, e.g. `-DEXPOGLOW_WITH_CUDA=OFF` for expo_GLOW_OFX (see the table below).
+Each plug-in has its own CUDA option name, e.g. `-DAPGLOW_WITH_CUDA=OFF` for apGlow_OFX (see the table below).
 
 ### Manual CMake build and options
 
@@ -478,9 +680,9 @@ cmake --build build --config Release --parallel
 
 | Option | Default | Effect |
 |---|---|---|
-| `PUSHIT_WITH_CUDA` / `EXPOGLOW_WITH_CUDA` / `LDESPILL_WITH_CUDA` / `DESPILLIT_WITH_CUDA` | `ON` | Build the CUDA back-end (if a CUDA compiler is found). |
-| `PUSHIT_CUDA_ARCHS` / `EXPOGLOW_CUDA_ARCHS` / `LDESPILL_CUDA_ARCHS` / `DESPILLIT_CUDA_ARCHS` | empty (automatic) | GPU architectures, e.g. `"75-real;86-real"`. |
-| `EXPOGLOW_AVX2` | `OFF` | AVX2 / FMA on the CPU, about 15 % faster. The plug-in will **not load** on a CPU without AVX2 (before Intel Haswell / AMD Ryzen). |
+| `PUSHIT_WITH_CUDA` / `APGLOW_WITH_CUDA` / `LDESPILL_WITH_CUDA` / `DESPILLIT_WITH_CUDA` / `MASTERKEYER_WITH_CUDA` | `ON` | Build the CUDA back-end (if a CUDA compiler is found). |
+| `PUSHIT_CUDA_ARCHS` / `APGLOW_CUDA_ARCHS` / `LDESPILL_CUDA_ARCHS` / `DESPILLIT_CUDA_ARCHS` / `MASTERKEYER_CUDA_ARCHS` | empty (automatic) | GPU architectures, e.g. `"75-real;86-real"`. |
+| `APGLOW_AVX2` | `OFF` | AVX2 / FMA on the CPU, about 15 % faster. The plug-in will **not load** on a CPU without AVX2 (before Intel Haswell / AMD Ryzen). |
 | `OPENFX_ROOT` | empty | Use a local OpenFX SDK checkout instead of downloading it. |
 
 ---
@@ -497,7 +699,7 @@ Copy the `.ofx.bundle` folder into the OFX plug-in folder of your system:
 
 You can also put the bundles in any folder and add that folder to the `OFX_PLUGIN_PATH` environment variable.
 
-The nodes appear in the **Filter** menu (push_IT_OFX, expo_GLOW_OFX) and the **Keyer** menu (L_Despill_OFX, despill_IT_OFX), or with Tab.
+The nodes appear in the **Filter** menu (push_IT_OFX, apGlow_OFX) and the **Keyer** menu (L_Despill_OFX, despill_IT_OFX, MasterKeyer_OFX), or with Tab.
 
 **After an installation or an update, clear Nuke's OFX cache** (close Nuke first). Otherwise Nuke may keep showing the old version or not show the node at all:
 - Windows: delete `%LOCALAPPDATA%\Temp\nuke\ofxplugincache`
@@ -509,9 +711,15 @@ The nodes appear in the **Filter** menu (push_IT_OFX, expo_GLOW_OFX) and the **K
 
 ---
 
+## Viewer overlays
+
+push_IT_OFX, apGlow_OFX, despill_IT_OFX and MasterKeyer_OFX draw widgets in the Viewer while their panel is open (see each plug-in). Like the handles of Nuke's own nodes (a Transform, for instance), they cannot be dragged while the Viewer is playing: pause the playback to use them. The parameters of the panel can still be changed during playback.
+
+---
+
 ## GPU notes
 
-Nuke does not give GPU buffers to OFX plug-ins. With *Use GPU* on, each frame is sent to the graphics card, processed entirely there, and copied back. The copies go through page-locked memory, overlapped with the transfers and spread over several CPU cores; expo_GLOW_OFX only transfers the RGB channels it needs. In practice the host ↔ GPU transfers, not the processing, set the GPU render time, so the gain is largest on heavy settings (large blurs, Vector Warp, many glow steps).
+Nuke does not give GPU buffers to OFX plug-ins. With *Use GPU* on, each frame is sent to the graphics card, processed entirely there, and copied back. The copies go through page-locked memory, overlapped with the transfers and spread over several CPU cores; apGlow_OFX only transfers the RGB channels it needs. In practice the host ↔ GPU transfers, not the processing, set the GPU render time, so the gain is largest on heavy settings (large blurs, Vector Warp, many glow steps).
 
 If CUDA is not available or a GPU render fails, the frame is rendered on the CPU and a warning is written to Nuke's log.
 
@@ -524,13 +732,14 @@ If CUDA is not available or a GPU render fails, the frame is rendered on the CPU
 - Windows: run `ofx_bench\build_and_run.bat`. The results are written to `bench_result.txt`.
 - Linux: run `ofx_bench/run.sh`.
 
-The benchmark contains a copy of the plug-in sources (`ofx_bench/src/push_it`, `ofx_bench/src/expo_glow`, `ofx_bench/src/l_despill`, `ofx_bench/src/despill_it`): copy the files again after changing a plug-in.
+The benchmark contains a copy of the plug-in sources (`ofx_bench/src/push_it`, `ofx_bench/src/expo_glow` (apGlow_OFX), `ofx_bench/src/l_despill`, `ofx_bench/src/despill_it`, `ofx_bench/src/master_keyer`): copy the files again after changing a plug-in.
 
 ---
 
 ## Credits
 
-- expo_GLOW_OFX is based on **apGlow v1.2** by Adrian Pueyo, [adrianpueyo.com](https://www.adrianpueyo.com), 2015-2022.
+- apGlow_OFX is based on **apGlow v1.2** by Adrian Pueyo, [adrianpueyo.com](https://www.adrianpueyo.com), 2015-2022.
 - push_IT_OFX is inspired by the *Pixel Spread* effect of Autodesk Flame.
 - L_Despill_OFX is based on the **L_Despill v05** gizmo by Justin Johnson (Luma Pictures) and the **DespillMadness** gizmo.
+- MasterKeyer_OFX is inspired by the *Master Keyer* of Autodesk Flame (independent implementation; Flame's algorithm is not public).
 - Built on the [OpenFX](https://github.com/AcademySoftwareFoundation/openfx) SDK.

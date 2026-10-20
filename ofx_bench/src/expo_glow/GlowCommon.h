@@ -1,5 +1,5 @@
 // GlowCommon.h
-// Per-pixel / per-line maths shared by the CPU and CUDA back-ends of expo_GLOW_OFX.
+// Per-pixel / per-line maths shared by the CPU and CUDA back-ends of apGlow_OFX.
 #pragma once
 
 #include <math.h>

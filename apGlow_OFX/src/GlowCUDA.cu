@@ -1,5 +1,5 @@
 // GlowCUDA.cu
-// CUDA back-end of expo_GLOW_OFX. Nuke hands host images to OFX plug-ins, so the
+// CUDA back-end of apGlow_OFX. Nuke hands host images to OFX plug-ins, so the
 // image is uploaded, the whole glow is computed on the GPU and the result is
 // downloaded. Device buffers are cached between renders (mutex protected).
 //

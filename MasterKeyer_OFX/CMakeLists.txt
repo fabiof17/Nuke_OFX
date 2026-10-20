@@ -1,16 +1,23 @@
 cmake_minimum_required(VERSION 3.20)
-project(expo_GLOW_OFX VERSION 1.0 LANGUAGES CXX)
+project(MasterKeyer_OFX VERSION 1.0 LANGUAGES CXX)
 
 # ------------------------------------------------------------------ options
-option(EXPOGLOW_WITH_CUDA "Build the CUDA GPU back-end" ON)
-option(EXPOGLOW_AVX2 "Use AVX2/FMA instructions on the CPU (about 15 % faster, the plug-in will not load on CPUs without AVX2)" OFF)
-set(EXPOGLOW_CUDA_ARCHS "" CACHE STRING
+option(MASTERKEYER_WITH_CUDA "Build the CUDA GPU back-end" ON)
+set(MASTERKEYER_CUDA_ARCHS "" CACHE STRING
     "GPU architectures, e.g. 75-real;86-real;89-real;120-real (empty = automatic from the CUDA version)")
 set(OPENFX_ROOT "" CACHE PATH "Local OpenFX SDK checkout (empty = download OFX_Release_1.5.1 from GitHub)")
 set(OPENFX_GIT_TAG "OFX_Release_1.5.1" CACHE STRING "OpenFX tag to download when OPENFX_ROOT is empty")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Nuke 14 and older ship their own, older msvcp140.dll, which the plug-in then uses. Code built
+# with Visual Studio 2022 17.10 or newer crashes there as soon as a std::mutex is locked
+# (constexpr mutex constructor, Microsoft STL change). This keeps the old layout: the plug-ins
+# then run with any MSVC runtime, old or new.
+if(MSVC)
+    add_compile_definitions(_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR)
+endif()
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
@@ -42,76 +49,73 @@ if(MSVC)
 endif()
 
 # ------------------------------------------------------------------ plug-in
-add_library(expo_GLOW_OFX MODULE
-    src/GlowPlugin.cpp
-    src/GlowCPU.cpp
-    src/GlowCommon.h
-    src/GlowCore.h)
-target_link_libraries(expo_GLOW_OFX PRIVATE OfxSupport)
+add_library(MasterKeyer_OFX MODULE
+    src/MasterKeyerPlugin.cpp
+    src/MasterKeyerCPU.cpp
+    src/MasterKeyerCommon.h
+    src/MasterKeyerCore.h
+    src/MKShared.h)
+target_link_libraries(MasterKeyer_OFX PRIVATE OfxSupport)
+# viewer overlay (OFX overlay interact) drawn with OpenGL
+find_package(OpenGL REQUIRED)
+target_link_libraries(MasterKeyer_OFX PRIVATE OpenGL::GL)
 
-set(EXPOGLOW_HAS_CUDA OFF)
-if(EXPOGLOW_WITH_CUDA)
+set(MASTERKEYER_HAS_CUDA OFF)
+if(MASTERKEYER_WITH_CUDA)
     include(CheckLanguage)
     check_language(CUDA)
     if(CMAKE_CUDA_COMPILER)
         enable_language(CUDA)
-        set(EXPOGLOW_HAS_CUDA ON)
+        set(MASTERKEYER_HAS_CUDA ON)
         # Architectures are set on the target itself: depending on the generator
         # (Visual Studio) and CUDA version, CMAKE_CUDA_ARCHITECTURES can end up empty.
-        if(EXPOGLOW_CUDA_ARCHS)
-            set(PS_CUDA_ARCHS "${EXPOGLOW_CUDA_ARCHS}")
+        if(MASTERKEYER_CUDA_ARCHS)
+            set(PS_CUDA_ARCHS "${MASTERKEYER_CUDA_ARCHS}")
         elseif(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 12.8)
             # Turing, Ampere, Ada, Blackwell (native) + PTX for future GPUs
             set(PS_CUDA_ARCHS "75-real;86-real;89-real;120-real;120-virtual")
         else()
             set(PS_CUDA_ARCHS "75-real;86-real;89-real;89-virtual")
         endif()
-        message(STATUS "expo_GLOW_OFX: CUDA ${CMAKE_CUDA_COMPILER_VERSION}, architectures = ${PS_CUDA_ARCHS}")
+        message(STATUS "MasterKeyer_OFX: CUDA ${CMAKE_CUDA_COMPILER_VERSION}, architectures = ${PS_CUDA_ARCHS}")
     else()
         message(WARNING "CUDA toolkit not found: building the CPU-only version.")
     endif()
 endif()
 
-if(EXPOGLOW_HAS_CUDA)
-    target_sources(expo_GLOW_OFX PRIVATE src/GlowCUDA.cu)
-    set_target_properties(expo_GLOW_OFX PROPERTIES
+if(MASTERKEYER_HAS_CUDA)
+    target_sources(MasterKeyer_OFX PRIVATE src/MasterKeyerCUDA.cu)
+    set_target_properties(MasterKeyer_OFX PROPERTIES
         CUDA_ARCHITECTURES "${PS_CUDA_ARCHS}"
         CUDA_RUNTIME_LIBRARY Static          # no cudart DLL to ship next to the plug-in
         CUDA_STANDARD 17)
-    target_compile_options(expo_GLOW_OFX PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math -lineinfo>)
+    # no --use_fast_math and no fused multiply-add: same results as the CPU
+    target_compile_options(MasterKeyer_OFX PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-lineinfo --fmad=false>)
 else()
-    target_sources(expo_GLOW_OFX PRIVATE src/GlowCUDAStub.cpp)
-endif()
-
-if(EXPOGLOW_AVX2 AND CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64|amd64")
-    if(MSVC)
-        target_compile_options(expo_GLOW_OFX PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/arch:AVX2>)
-    else()
-        target_compile_options(expo_GLOW_OFX PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-mavx2 -mfma>)
-    endif()
+    target_sources(MasterKeyer_OFX PRIVATE src/MasterKeyerCUDAStub.cpp)
 endif()
 
 if(MSVC)
-    target_compile_options(expo_GLOW_OFX PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W3 /O2 /fp:fast>)
-    target_compile_definitions(expo_GLOW_OFX PRIVATE NOMINMAX _CRT_SECURE_NO_WARNINGS)
+    target_compile_options(MasterKeyer_OFX PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W3 /O2 /fp:fast>)
+    target_compile_definitions(MasterKeyer_OFX PRIVATE NOMINMAX _CRT_SECURE_NO_WARNINGS)
 else()
-    target_compile_options(expo_GLOW_OFX PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall -O3>)
+    target_compile_options(MasterKeyer_OFX PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall -O3>)
     find_package(Threads REQUIRED)
-    target_link_libraries(expo_GLOW_OFX PRIVATE Threads::Threads)
+    target_link_libraries(MasterKeyer_OFX PRIVATE Threads::Threads)
     # Export only the OFX entry points and embed the C++ runtime, so the plug-in
     # does not clash with the libstdc++ shipped inside Nuke.
-    set_target_properties(expo_GLOW_OFX OfxSupport PROPERTIES
+    set_target_properties(MasterKeyer_OFX OfxSupport PROPERTIES
         CXX_VISIBILITY_PRESET hidden
         CUDA_VISIBILITY_PRESET hidden
         VISIBILITY_INLINES_HIDDEN ON)
     if(NOT APPLE)
-        target_link_options(expo_GLOW_OFX PRIVATE -static-libstdc++ -static-libgcc
+        target_link_options(MasterKeyer_OFX PRIVATE -static-libstdc++ -static-libgcc
             "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/exports.map")
-        set_target_properties(expo_GLOW_OFX PROPERTIES LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/exports.map")
+        set_target_properties(MasterKeyer_OFX PROPERTIES LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/exports.map")
     endif()
 endif()
 
-# OFX bundle layout: expo_GLOW_OFX.ofx.bundle/Contents/<arch>/expo_GLOW_OFX.ofx
+# OFX bundle layout: MasterKeyer_OFX.ofx.bundle/Contents/<arch>/MasterKeyer_OFX.ofx
 if(WIN32)
     set(OFX_ARCH Win64)
 elseif(APPLE)
@@ -119,8 +123,8 @@ elseif(APPLE)
 else()
     set(OFX_ARCH Linux-x86-64)
 endif()
-set(BUNDLE_DIR "${CMAKE_BINARY_DIR}/expo_GLOW_OFX.ofx.bundle")
-set_target_properties(expo_GLOW_OFX PROPERTIES
+set(BUNDLE_DIR "${CMAKE_BINARY_DIR}/MasterKeyer_OFX.ofx.bundle")
+set_target_properties(MasterKeyer_OFX PROPERTIES
     PREFIX ""
     SUFFIX ".ofx"
     LIBRARY_OUTPUT_DIRECTORY "${BUNDLE_DIR}/Contents/${OFX_ARCH}"
@@ -134,6 +138,6 @@ if(WIN32)
 else()
     set(OFX_INSTALL_DIR "/usr/OFX/Plugins" CACHE PATH "OFX plug-in folder")
 endif()
-install(TARGETS expo_GLOW_OFX LIBRARY DESTINATION "${OFX_INSTALL_DIR}/expo_GLOW_OFX.ofx.bundle/Contents/${OFX_ARCH}")
+install(TARGETS MasterKeyer_OFX LIBRARY DESTINATION "${OFX_INSTALL_DIR}/MasterKeyer_OFX.ofx.bundle/Contents/${OFX_ARCH}")
 
-message(STATUS "expo_GLOW_OFX: CUDA back-end = ${EXPOGLOW_HAS_CUDA}")
+message(STATUS "MasterKeyer_OFX: CUDA back-end = ${MASTERKEYER_HAS_CUDA}")
