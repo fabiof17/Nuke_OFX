@@ -1,0 +1,40 @@
+# Builds the CornerPinEx_OFX Windows plugin (MSVC + CUDA) and uploads the OFX bundle as an artifact.
+name: CornerPinEx_OFX (Windows)
+
+on:
+  push:
+    paths: ["CornerPinEx_OFX/**", ".github/workflows/cornerpinex_windows.yml"]
+  pull_request:
+    paths: ["CornerPinEx_OFX/**", ".github/workflows/cornerpinex_windows.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    defaults:
+      run:
+        working-directory: CornerPinEx_OFX
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install CUDA
+        uses: Jimver/cuda-toolkit@v0.2.19
+        with:
+          cuda: "12.6.3"
+          method: network
+          sub-packages: '["nvcc", "cudart", "visual_studio_integration"]'
+
+      - name: Configure
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCORNERPINEX_OFX_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      # no GPU on the runner: this runs the CPU tests, the GPU tests are skipped
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CornerPinEx_OFX.ofx.bundle
+          path: CornerPinEx_OFX/build/CornerPinEx_OFX.ofx.bundle

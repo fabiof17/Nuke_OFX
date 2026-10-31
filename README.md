@@ -8,8 +8,9 @@ A collection of OpenFX plug-ins for The Foundry Nuke, written in C++ with option
 | [**apGlow_OFX**](#apglow_ofx) | Exponential glow: a sum of blurs whose sizes grow geometrically, for a soft and wide light falloff. |
 | [**L_Despill_OFX**](#l_despill_ofx) | Spill suppression for green, blue and red screens, with spill matte processing, spill replace and background re-light. |
 | [**despill_IT_OFX**](#despill_it_ofx) | Spatially aware despill: local screen colour, despill fading from the edges inwards, protected hues, edge colour rebuilt from the subject, background light and light wrap. |
+| [**CornerPinEx_OFX**](#cornerpinex_ofx) | GPU-accelerated corner pin derived from Natron's CornerPin: CUDA rendering, EWA high-quality filters and per-corner offsets. GPL v2+. |
 
-The plug-ins run on Windows, Linux and macOS. On Windows and Linux they can render on an NVIDIA GPU with CUDA; when no GPU is available they fall back to a multithreaded CPU renderer automatically. The CPU and GPU renders are identical.
+The plug-ins run on Windows, Linux and macOS. On Windows and Linux they can render on an NVIDIA GPU with CUDA; when no GPU is available they fall back to a multithreaded CPU renderer automatically. The CPU and GPU renders are identical (CornerPinEx_OFX: within 1 to 2 levels out of 255 with the classic filters, see its section).
 
 Ready-to-use builds for Windows and Linux are available on the [Releases](../../releases) page.
 
@@ -20,6 +21,7 @@ push_IT_OFX/      edge extend plug-in (sources, CMakeLists.txt, build.bat, build
 apGlow_OFX/       glow plug-in (sources, CMakeLists.txt, build.bat, build.sh)
 L_Despill_OFX/    classic despill plug-in (sources, CMakeLists.txt, build.bat, build.sh)
 despill_IT_OFX/   spatially aware despill plug-in (sources, CMakeLists.txt, build.bat, build.sh)
+CornerPinEx_OFX/  GPU corner pin plug-in (sources, tests, CMakeLists.txt, build.bat, build.sh, install checks)
 ofx_bench/        optional stand-alone CPU / GPU benchmark (no Nuke needed)
 ```
 
@@ -373,6 +375,117 @@ Like every despill that compares colour channels, it detects reflected spill poo
 
 ---
 
+## CornerPinEx_OFX
+
+A GPU-accelerated corner pin, derived from **Natron's CornerPin** ([openfx-misc](https://github.com/NatronGitHub/openfx-misc), `CornerPin/CornerPin.cpp`, and [openfx-supportext](https://github.com/NatronGitHub/openfx-supportext), `ofxsTransform3x3`). It keeps everything the original does and adds:
+
+| Addition | Details |
+|---|---|
+| **GPU rendering (CUDA)** | Filtering, motion blur and mask / mix run on the NVIDIA GPU. If the GPU is not available or an error occurs, the frame is rendered on the CPU automatically. |
+| **High-quality filters** | **EWA Gaussian** and **EWA Lanczos3**: anisotropic filters computed on a mipmap pyramid. They avoid aliasing and moiré even under strong perspective. They run on the GPU, and on the CPU as a fallback. |
+| **Per-corner offsets** | Every "to" and "from" point has its own x and y offset, in a collapsible *Offsets* group of the *to* and *from* tabs. Useful to adjust tracked corners without touching the tracking curves. The overlay draws the offset quad in orange. |
+| **GPU settings** | Below *Overlay Points*, between two separators: the `Use GPU (CUDA)` checkbox, with the detected GPU model on its right. The first NVIDIA GPU of the machine is used. |
+
+Both variants of the original are provided: **CornerPinEx_OFX** and **CornerPinExMasked_OFX** (with a mask input and a mix). Their identifiers differ from Natron's (`community.openfx.CornerPinEx_OFX…`), so both plug-ins can be installed side by side.
+
+> **License**: unlike the rest of this repository (MIT), CornerPinEx_OFX is derived from GPL code and is therefore released under the **GPL v2 or later** (see [`CornerPinEx_OFX/LICENSE`](CornerPinEx_OFX/LICENSE)). You can use it freely, in production too. If you distribute the plug-in (binaries included), you must also provide its source code under the same license. The modified files say so in their header.
+
+### Parameters
+
+The parameters added to Natron's CornerPin:
+
+- **Filter**: on top of Natron's filters, two HQ filters:
+  - `EWA Gaussian (HQ)`: the cleanest under strong perspective, no ringing, slightly soft;
+  - `EWA Lanczos3 (HQ)`: sharp and alias-free. **Turn on `Clamp`** to remove ringing on high-contrast edges.
+- **Offsets** (collapsible group in the `to` and `from` tabs): `to1 offset x`, `to1 offset y` … `from4 offset y`, each animatable on its own, and a `Reset Offsets` button per tab. The offsets are part of the point positions, so `Amount` interpolates them too.
+- **Overlay Points** switches by itself: changing a value of the `To` tab (point, enable checkbox, offset, `Copy "From"` and `Reset Offsets` buttons) shows the "to" points, and a value of the `From` tab shows the "from" points. Just clicking a tab is not enough, because Nuke does not tell OFX plug-ins about tab changes. The menu can still be set by hand.
+- **GPU** (below *Overlay Points*): `Use GPU (CUDA)` and the GPU model on its right. If a GPU render fails (out of memory, for instance), the frame is rendered again on the CPU, and the message is written to the console and shown next to the GPU name.
+- **Crop to Format** (on by default): limits the output to the project format. When the corner pin enlarges the image past the frame, the pixels outside the format are neither computed nor transferred. Turn it off to keep the overscan.
+
+All the other parameters (from / to, Amount, Extra Matrix, Invert, Motion Blur, Shutter, Black outside, Mask / Mix…) behave as in Natron's CornerPin.
+
+### How it works
+
+Nuke gives images to OFX plug-ins in CPU memory: it does not offer the OpenFX 1.5 GPU render paths (CUDA / Metal / OpenCL) that DaVinci Resolve does, for instance. So the plug-in manages the GPU itself, for every render:
+
+1. it uploads the source (and the mask) to the GPU and converts it to float;
+2. for the EWA filters, it builds the mipmap pyramid on the GPU;
+3. a single kernel computes every pixel of the render window: homography, filter, adaptive motion blur and mask / mix;
+4. it converts the result to the output bit depth and copies it back into Nuke's image.
+
+The plug-in asks Nuke for whole images (no tiles), so there is one upload per frame. The GPU resources (stream, device memory, page-locked transfer buffers) are kept from one render to the next in two "slots": at most two renders run on the GPU at the same time. Transfers alternate between two page-locked buffers, so that the CPU-side copy and the PCIe transfer overlap.
+
+**The sampling code is the same on the CPU and on the GPU** (`src/cpSampler.h`, compiled both as C++ and as CUDA). The classic filters (Impulse … Notch) use exactly Natron's formulas, and the motion blur uses the same algorithm: adaptive Monte Carlo over 1000 transforms of the shutter interval.
+
+When the GPU is off and the filter is a classic one, **Natron's original CPU code** runs, and the result is identical, pixel for pixel, to Natron's CornerPin (see *Tests*). On the GPU, the classic filters follow the same algorithm, including Natron's 3ⁿ×3ⁿ supersampling when minifying, but compute in float instead of double: they differ from Natron by at most 1 to 2 levels out of 255, on fewer than 0.3 % of the pixels.
+
+### When does the GPU help?
+
+Because of the CPU ↔ GPU transfers that Nuke imposes, the gain is small for a plain Cubic without motion blur. It is large with **motion blur** (up to 40 × `Motion Blur` samples per pixel) and with the **EWA filters** (dozens of texels per sample). On one CPU thread, a 2048×1080 RGBA float frame takes about 0.3 s in Cubic, 3.7 s in EWA Lanczos3, 15 s in Cubic with motion blur and 130 s in EWA with motion blur: exactly the cases the GPU parallelises. The CPU renderer of course uses every core. `test_engine --bench` prints the CPU and GPU times on your machine.
+
+### Measuring performance
+
+Set the environment variable `CORNERPINEX_OFX_PROFILE=1` before starting Nuke:
+
+```bat
+set CORNERPINEX_OFX_PROFILE=1
+"C:\Program Files\Nuke16.0v6\Nuke16.0.exe"
+```
+
+On Linux: `CORNERPINEX_OFX_PROFILE=1 nuke`.
+
+Each render appends a line to `%TEMP%\CornerPinEx_OFX_profile.log` (Windows) or `/tmp/CornerPinEx_OFX_profile.log` (Linux), with the rendered size, the filter and the time of each stage: upload, mipmaps, compute, copy back to Nuke. CPU renders are logged too. For transfers, `cpu copy` is the time spent copying images on the CPU side. These copies are spread over several cores (half of the cores, 6 at most) by threads created once. `CORNERPINEX_OFX_COPY_THREADS=n` forces the number of threads, and `1` turns the spreading off.
+
+`CORNERPINEX_OFX_TRANSFER` picks how images move between Nuke's memory and the GPU:
+
+| Value | Method |
+|---|---|
+| `staged` (default) | CPU copy into two page-locked buffers, alternating with the transfer |
+| `direct` | direct transfer from Nuke's memory; the NVIDIA driver manages the buffers itself |
+| `register` | Nuke's image memory is page-locked for the duration of the transfer: no CPU copy (`page-lock` in the log) |
+
+The fastest one depends on the system and the machine: compare them with the log. On the Windows test machine (2K, Cubic, motion blur), `staged` was the fastest overall: about 40 ms per frame, against 45 to 65 ms with `direct` and 70 to 95 ms with `register`. With `register`, the transfer itself was a little shorter, but the GPU compute became 4 to 5 times slower. On Linux, `register` may well be the fastest: measure it.
+
+### Tests
+
+- `test_engine`, the engine test executable, needs no OFX host. It checks the engine on known cases: identity, translation, anti-aliasing of a checkerboard minified ×8 in perspective, motion blur ramp, mask / mix, 8- and 16-bit depths, tiled rendering. **If a CUDA device is present, it also compares the GPU render with the CPU render** for every filter, bit depth (8 / 16 / 32 bits) and channel count (1 to 4), with and without motion blur. `test_engine --bench` also prints the render times. `build.bat` and `build.sh` build and run it.
+- `tests/natron_render_test.py` and `tests/compare_renders.py` test the plug-in in a real OFX host (Natron on the command line):
+
+  ```sh
+  CPGPU_OUT=/tmp/out OFX_PLUGIN_PATH=build NatronRenderer -t tests/natron_render_test.py
+  python3 tests/compare_renders.py /tmp/out
+  ```
+
+  With the classic filters, CornerPinEx_OFX gives exactly the same image as Natron's CornerPin (0 pixels differ), with the offsets too (compared with Natron's CornerPin given the already-summed points) and with motion blur.
+
+### Building and checking the installation
+
+CornerPinEx_OFX builds like the other plug-ins (see [Building](#building)), with a few differences:
+
+- CMake downloads the OFX headers and support library from [NatronGitHub/openfx](https://github.com/NatronGitHub/openfx) and [openfx-supportext](https://github.com/NatronGitHub/openfx-supportext), pinned to the commits used by openfx-misc.
+- `build.bat` and `build.sh` also build and run `test_engine`. When `build.bat` is run as administrator, it offers to install the bundle into the OFX folder. `build.sh install` copies it into `/usr/OFX/Plugins` (sudo).
+- `check_install.bat` (Windows) and `./check_install.sh` (Linux) check the installation, load the plug-in as Nuke does, report missing libraries and clear Nuke's OFX cache. Close Nuke before running them.
+- CMake options: `CORNERPINEX_OFX_WITH_CUDA` (`ON`), `CORNERPINEX_OFX_BUILD_TESTS` (`OFF`), `CMAKE_CUDA_ARCHITECTURES` (default `"75-real;86-real;89-real;75-virtual"`; the build scripts add the installed GPU if it is newer, e.g. `120-real` for an RTX 50xx with CUDA 12.8+), and `OFX_DIR` / `SUPPORTEXT_DIR` to use local checkouts instead of downloading them.
+- On Linux, **build on the machine that runs Nuke**, or on a distribution at least as old: the plug-in depends on the glibc version of the build system. If nvcc rejects your GCC version ("unsupported GNU version"), point it to a compatible one: `CUDAHOSTCXX=g++-12 ./build.sh clean` (or enable a suitable `gcc-toolset` on Rocky).
+- The GitHub Actions workflow `.github/workflows/cornerpinex_windows.yml` builds the Windows plug-in (MSVC + CUDA), runs the CPU tests and uploads the bundle as an artifact.
+
+The node is in the **Transform** menu. Next to `Use GPU (CUDA)`, the panel should show your card, e.g. `Local GPU: NVIDIA GeForce RTX 4080 (16376 MB)`. "CUDA: no NVIDIA GPU available" means rendering will run on the CPU.
+
+### Files
+
+```
+src/CornerPinEx_OFX.cpp   plug-in (Natron's CornerPin.cpp + GPU, offsets, HQ filters; changes marked "CornerPinEx_OFX")
+src/cpTransform3x3.*      modified copy of ofxsTransform3x3 (prepareRender hook + HQ filter options)
+src/cpSampler.h           sampling shared by CPU and GPU: filters, EWA, motion blur, mask / mix
+src/cpCuda.cu             CUDA engine
+src/cpCpuEngine.*         CPU engine (HQ filters without GPU, test reference)
+src/cpCudaStub.cpp        replaces cpCuda.cu in a build without CUDA
+tests/                    engine tests and render tests in Natron
+resources/                node icons
+```
+
+---
+
 ## Performance
 
 Render time per frame, CPU vs GPU, measured with `ofx_bench` (best of 5 runs). GPU times include the host ↔ GPU transfers, as in Nuke. CPU and GPU renders are identical in every test (differences below 1e-5 of the pixel values).
@@ -504,7 +617,7 @@ The GPU is 1.5 to 14 times faster than the CPU on workstation A, and 2.3 to 17 t
 | GPU (optional) | NVIDIA GPU + [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) 12.x or 13.x | NVIDIA driver 580+ and CUDA Toolkit 13 (NVIDIA repository for Ubuntu 24.04) | not available (CPU only) |
 
 Notes:
-- The OpenFX SDK (`OFX_Release_1.5.1`) is downloaded automatically from GitHub during the first configuration, which is why Git is required.
+- The OpenFX SDK (`OFX_Release_1.5.1`) is downloaded automatically from GitHub during the first configuration, which is why Git is required. CornerPinEx_OFX downloads Natron's OFX headers and support library instead.
 - Visual Studio 2026 needs CUDA Toolkit 13.x. The Nsight warnings shown by the CUDA installer about Visual Studio integration can be ignored.
 - **Nuke versions**: tested with Nuke 14 and Nuke 17 on Windows; one build works for all versions. Nuke 14 and older ship their own, older Microsoft C++ runtime (`msvcp140.dll`), which plug-ins built with Visual Studio 2022 17.10 or newer would crash with. The CMake projects define `_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR` on Windows so that the plug-ins work with every Nuke version.
 - The CUDA runtime is linked statically: the plug-ins only need a recent NVIDIA driver on the machine that runs Nuke, no CUDA DLL to ship.
@@ -563,10 +676,12 @@ cmake --build build --config Release --parallel
 
 | Option | Default | Effect |
 |---|---|---|
-| `PUSHIT_WITH_CUDA` / `APGLOW_WITH_CUDA` / `LDESPILL_WITH_CUDA` / `DESPILLIT_WITH_CUDA` | `ON` | Build the CUDA back-end (if a CUDA compiler is found). |
+| `PUSHIT_WITH_CUDA` / `APGLOW_WITH_CUDA` / `LDESPILL_WITH_CUDA` / `DESPILLIT_WITH_CUDA` / `CORNERPINEX_OFX_WITH_CUDA` | `ON` | Build the CUDA back-end (if a CUDA compiler is found). |
 | `PUSHIT_CUDA_ARCHS` / `APGLOW_CUDA_ARCHS` / `LDESPILL_CUDA_ARCHS` / `DESPILLIT_CUDA_ARCHS` | empty (automatic) | GPU architectures, e.g. `"75-real;86-real"`. |
 | `APGLOW_AVX2` | `OFF` | AVX2 / FMA on the CPU, about 15 % faster. The plug-in will **not load** on a CPU without AVX2 (before Intel Haswell / AMD Ryzen). |
 | `OPENFX_ROOT` | empty | Use a local OpenFX SDK checkout instead of downloading it. |
+
+CornerPinEx_OFX uses `CMAKE_CUDA_ARCHITECTURES`, `OFX_DIR` and `SUPPORTEXT_DIR` instead (see [its section](#building-and-checking-the-installation)).
 
 ---
 
@@ -582,7 +697,7 @@ Copy the `.ofx.bundle` folder into the OFX plug-in folder of your system:
 
 You can also put the bundles in any folder and add that folder to the `OFX_PLUGIN_PATH` environment variable.
 
-The nodes appear in the **Filter** menu (push_IT_OFX, apGlow_OFX) and the **Keyer** menu (L_Despill_OFX, despill_IT_OFX), or with Tab.
+The nodes appear in the **Filter** menu (push_IT_OFX, apGlow_OFX), the **Keyer** menu (L_Despill_OFX, despill_IT_OFX) and the **Transform** menu (CornerPinEx_OFX), or with Tab.
 
 **After an installation or an update, clear Nuke's OFX cache** (close Nuke first). Otherwise Nuke may keep showing the old version or not show the node at all:
 - Windows: delete `%LOCALAPPDATA%\Temp\nuke\ofxplugincache`
@@ -624,4 +739,5 @@ The benchmark contains a copy of the plug-in sources (`ofx_bench/src/push_it`, `
 - apGlow_OFX is based on **apGlow v1.2** by Adrian Pueyo, [adrianpueyo.com](https://www.adrianpueyo.com), 2015-2022.
 - push_IT_OFX is inspired by the *Pixel Spread* effect of Autodesk Flame.
 - L_Despill_OFX is based on the **L_Despill v05** gizmo by Justin Johnson (Luma Pictures) and the **DespillMadness** gizmo.
+- CornerPinEx_OFX is derived from **Natron's CornerPin** ([openfx-misc](https://github.com/NatronGitHub/openfx-misc) and [openfx-supportext](https://github.com/NatronGitHub/openfx-supportext), © INRIA and The Natron Developers, GPL v2+).
 - Built on the [OpenFX](https://github.com/AcademySoftwareFoundation/openfx) SDK.
