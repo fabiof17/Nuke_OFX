@@ -1,0 +1,16 @@
+# Example parametric preset: a tired old zoom.
+# Missing keys take the carender defaults (no aberrations, f/2.8, round diaphragm).
+name = Example: Tired Old Zoom
+hint = Soft corners, field curvature, purple fringes and a slight barrel distortion.
+fnumber = 3.5
+w040 = 2
+w131 = 6
+w222 = 8
+w220 = 6
+w311 = -1.5
+lateral_ca = 2.5
+axial_ca = 1.5
+zernike = 9:0.4      # trefoil: slight lens decentring
+blades = 6
+roundness = 0.4
+vignetting = 0.4

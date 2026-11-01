@@ -1,0 +1,25 @@
+# ChromaAberrations_OFX lens file
+name = Wide angle f/4, 100 degrees (retrofocus)
+source = M. Laikin, Lens Design, 4th ed., CRC Press 2007, p. 108; prescription as published in the Optiland samples (MIT licence)
+fnumber = 4.0
+half_field = 50
+surfaces
+ 8.0107    0.2500   N-SK4
+ 1.1856    0.9613   air
+ 1.6747    0.3578   SF1
+-7.5157    0.2136   N-SK4
+ 0.9411    0.4146   air
+-1.7688    0.3333   SF1
+-1.5531    0.3863   N-SK4
+-2.2281    0.9842   air
+ inf       0.1000   air   auto stop
+ 13.6803   0.1400   N-SK4
+-3.4279    0.0605   air
+ 20.0257   0.3332   N-SK4
+-0.9258    0.4374   SF1
+-3.2233    0.2679   air
+ 10.3847   0.1400   SF1
+ 2.4272    0.2609   N-SK4
+-3.8828    0.0150   air
+ 3.3650    0.3167   N-SK4
+-14.7547   1.5604   air

@@ -1,0 +1,19 @@
+# Vintage lens: coma and astigmatism at the edges of the field, lateral colour, barrel distortion.
+fnumber = 2
+w040 = 6
+w131 = 20
+w222 = 12
+w220 = 4
+w311 = -2
+lateral_ca = 3
+axial_ca = 2
+blades = 6
+roundness = 0.5
+kernel = 65
+grid_x = 7
+grid_y = 5
+wavelengths = 10
+output = vintage_coma.exr
+report = vintage_coma.csv
+vignetting = 0.6     # mechanical vignetting: cat's-eye pupil in the corners
+focal = 40           # focal length (mm) for the natural cos^4 falloff (carender)

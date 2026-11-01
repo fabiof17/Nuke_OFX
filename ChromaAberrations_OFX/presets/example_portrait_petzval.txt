@@ -1,0 +1,13 @@
+# Example ChromaAberrations_OFX preset (same format as the carender files).
+# Put your own .txt files in your user folder:
+#   Windows : %APPDATA%\ChromaAberrations_OFX\presets
+#   Linux   : ~/.config/ChromaAberrations_OFX/presets
+# or in a folder listed in the CA_PRESET_PATH environment variable, then restart Nuke.
+name = Example: Petzval Portrait f/2
+hint = Petzval lens closed to f/2, focused at 2 m: sharp centre, swirling bokeh in the corners.
+lens = petzval_f14          # built-in lens, or path to a .lens file (relative to this file)
+fnumber = 2
+focus_distance = 2          # metres (0 = infinity)
+# focal = 100               # without a focal length, it is computed so that the corners stay inside the design field
+blades = 9
+roundness = 0.8

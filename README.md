@@ -9,8 +9,9 @@ A collection of OpenFX plug-ins for The Foundry Nuke, written in C++ with option
 | [**L_Despill_OFX**](#l_despill_ofx) | Spill suppression for green, blue and red screens, with spill matte processing, spill replace and background re-light. |
 | [**despill_IT_OFX**](#despill_it_ofx) | Spatially aware despill: local screen colour, despill fading from the edges inwards, protected hues, edge colour rebuilt from the subject, background light and light wrap. |
 | [**CornerPinEx_OFX**](#cornerpinex_ofx) | GPU-accelerated corner pin derived from Natron's CornerPin: CUDA rendering, EWA high-quality filters and per-corner offsets. GPL v2+. |
+| [**ChromaAberrations_OFX**](#chromaaberrations_ofx) | Physically based lens aberrations: wavelength-by-wavelength PSFs of a parametric or real (ray-traced) lens, with variable blur, diffraction, chromatic aberration, distortion and vignetting. GPL v3 or commercial. |
 
-The plug-ins run on Windows, Linux and macOS. On Windows and Linux they can render on an NVIDIA GPU with CUDA; when no GPU is available they fall back to a multithreaded CPU renderer automatically. The CPU and GPU renders are identical (CornerPinEx_OFX: within 1 to 2 levels out of 255 with the classic filters, see its section).
+The plug-ins run on Windows, Linux and macOS. On Windows and Linux they can render on an NVIDIA GPU with CUDA; when no GPU is available they fall back to a multithreaded CPU renderer automatically. The CPU and GPU renders are identical (CornerPinEx_OFX: within 1 to 2 levels out of 255 with the classic filters; ChromaAberrations_OFX: see its section).
 
 Ready-to-use builds for Windows and Linux are available on the [Releases](../../releases) page.
 
@@ -22,6 +23,7 @@ apGlow_OFX/       glow plug-in (sources, CMakeLists.txt, build.bat, build.sh)
 L_Despill_OFX/    classic despill plug-in (sources, CMakeLists.txt, build.bat, build.sh)
 despill_IT_OFX/   spatially aware despill plug-in (sources, CMakeLists.txt, build.bat, build.sh)
 CornerPinEx_OFX/  GPU corner pin plug-in (sources, tests, CMakeLists.txt, build.bat, build.sh, install checks)
+ChromaAberrations_OFX/  optical aberrations plug-in (sources, lenses, presets, tools, tests, CMakeLists.txt, build.bat, build.sh)
 ofx_bench/        optional stand-alone CPU / GPU benchmark (no Nuke needed)
 ```
 
@@ -486,6 +488,370 @@ resources/                node icons
 
 ---
 
+## ChromaAberrations_OFX
+
+Physically based optical aberrations. The plug-in computes the point spread function (PSF) of a lens wavelength by wavelength, on a grid covering the image, and applies it to the plate:
+
+- blur that varies across the field;
+- diffraction;
+- axial and lateral chromatic aberration;
+- distortion;
+- vignetting.
+
+The lens is described in one of two ways:
+
+- **Parametric**: you set its wavefront by hand (Seidel aberrations and Zernike terms), its diaphragm and its sensor;
+- **Real Lens**: you pick a real optical prescription (glasses, radii of curvature, thicknesses), traced ray by ray and wavelength by wavelength.
+
+Rendering runs on the GPU (CUDA + cuFFT) when possible, otherwise on the CPU. Two command-line tools, **`carender`** (applies the lens to an EXR) and **`psfmap`** (draws the PSFs), are used for tests and tuning outside Nuke.
+
+> **License**: unlike the rest of this repository (MIT), ChromaAberrations_OFX is **dual-licensed**: GPL v3 ([`ChromaAberrations_OFX/LICENSE`](ChromaAberrations_OFX/LICENSE)) or a commercial license for studios and vendors who want to integrate or distribute it without the GPL obligations. See [`ChromaAberrations_OFX/LICENSING.md`](ChromaAberrations_OFX/LICENSING.md) for the details and the third-party components and data. To keep the dual license possible, outside contributions need a contributor agreement (CLA).
+
+### Inputs
+
+| Input | Role |
+|---|---|
+| **Source** | Plate to process, in linear light. |
+| **Mask** | Optional. Limits the effect (with `Mix` and `Invert Mask`). |
+
+### Parameters
+
+The settings are split over five tabs.
+
+**Lens**
+- `Preset`: a ready-to-use lens (see [Cameras and presets](#cameras-and-presets)).
+- `f-number`: working aperture f/N.
+- `Filmback Width (mm)`: width of the sensor covered by the image (Super 35: 24.89; full frame: 36). It sets the size of a pixel, and therefore the size of the PSFs.
+- `Lens Model`, `Lens`, `Lens File` and `Focus Distance`: choice of a real lens (see [Real lenses](#real-lenses)).
+- `Focal Length (mm)`: focal length of the real lens, which is rescaled to it. In parametric mode, it drives the natural cos⁴ falloff.
+- `Centre on Image` (on by default): the optical axis is at the centre of the image. Turn it off to place the axis with the `Optical Center` handle in the Viewer, for a cropped plate for instance.
+- Diaphragm: `Diaphragm Blades`, `Blade Roundness`, `Blade Rotation` and `Pupil Aspect` (oval bokeh).
+- `Mechanical Vignetting` and `Vignetting Start`: cat's-eye pupil in the corners.
+- `Natural Vignetting`: amount of the cos⁴ falloff.
+
+**Aberrations**
+- The coefficients are in waves, at the edge of the pupil and in the corner of the image.
+- Available fields: Spherical, Coma, Astigmatism, Field Curvature, Distortion, Defocus, Axial Colour, Lateral Colour, Spherochromatism.
+- `Zernike Terms`: additional terms, e.g. `9:0.5, 11:0.3`.
+- `Aberration Amount` multiplies every coefficient. At 0, only diffraction remains.
+- The defaults give a decent modern lens, barely imperfect.
+
+**Spectral**
+- `Colour Space`: ACEScg (default), linear Rec.709 or linear Rec.2020. Images must be in linear light.
+- `Camera`: spectral sensitivities of the camera that shot the plate (default: CIE 1931 observer), and `Camera File` for a custom file.
+- Number of wavelengths in preview (8) and in final (24).
+
+**Render**
+- `Quality`:
+  - `Preview`: `PSF Grid (Preview)` grid (7 × 5), 8 wavelengths;
+  - `Final`: 24 wavelengths, automatic or fixed grid (below);
+  - `Preview in Viewer, Final in Render`: Preview in the Viewer, Final when rendering to disk. It relies on the "interactive render" flag the host passes to the plug-in; a host that does not pass it always gets Final.
+- `Final Grid`:
+  - `Automatic` (default): the grid starts from the Preview grid and is refined until the PSF interpolated at the centre of a cell differs from the PSF computed there by less than `Grid Tolerance` (2 % by default). The grid is limited to 25 points per side;
+  - `Fixed`: `PSF Grid (Final)` grid (15 × 11).
+- `Max PSF Size` (129 by default) and `Auto Size` (on by default). The size of each PSF is derived from the lens: the largest geometric spot, plus a margin for diffraction. `Max PSF Size` is then only a ceiling, in pixels at full resolution, so a sharp lens stays fast: 9 to 19 pixels instead of 129. Without `Auto Size`, every PSF is `Max PSF Size`.
+- `Use GPU (CUDA)`, with the GPU model shown on the right.
+
+**Output**
+- `View`:
+  - `Image`: the plate through the lens;
+  - `PSF Map`: the PSFs in white light at their place in the image, enlarged (`PSF Zoom`, 0 = automatic). It is displayed with a 2.2 gamma: it is a tuning view, not linear light. `Image Behind` shows the darkened image behind the PSFs; turned off, the background is black;
+  - `Test Chart`: the lens applied to a built-in chart (Siemens stars and HDR light points).
+- `Blur`, `Distortion & Lateral Colour` and `Vignetting` checkboxes turn each effect off.
+- `Mix` and `Invert Mask`.
+
+### Good to know
+
+- **Lens preparation.** When an optical setting changes, the plug-in recomputes the PSFs (with a progress bar). It takes from a few tenths of a second to a few seconds, depending on the aberrations, the quality and the number of cores. Each following frame only costs the render. This computation is cached per node and for a given image size.
+- **Proxy and Viewer downscale** are taken into account: the size of a pixel on the sensor and the size of the PSFs follow the render scale.
+- **Anamorphic plates.** The pixel aspect of the plate is read automatically (2 for a 2× squeeze). The lens is modelled in the desqueezed space: a round bokeh stays round there and looks squeezed on the plate. `Filmback Width` is the physical, squeezed width on the sensor.
+- **Image edges.** The output keeps the input format. Light that would leave the frame is lost, and the light of the edges is extended past the frame.
+- **Alpha.** The source alpha is copied without blur.
+
+### Real lenses
+
+In the Lens tab, set `Lens Model` to **Real Lens**, then pick a lens:
+
+| Lens | Prescription | Design field | Suggested focal length in Super 35 | What it shows |
+|---|---|---|---|---|
+| Double Gauss f/2 (modern Planar type) | US patent 8,879,901 | 21.6° | 75 mm and more | spherical aberration and coma wide open, fine lateral colour |
+| Wide angle f/4, 100° (retrofocus) | Laikin p. 108 | 100° | 12 mm and more | strong barrel distortion, light falloff in the corners |
+| Telephoto f/5.6 | Laikin p. 91 | 20° | 80 mm and more | axial colour, very even image |
+| Cooke triplet f/5 | Optiland example | 40° | 40 mm and more | field curvature and astigmatism towards the edges |
+| Petzval f/1.4 | Laikin p. 75 | 14° | 115 mm and more | soft centre wide open, "swirling" edges |
+
+You can also pick `Custom File` and load your own `.lens` file.
+
+**What the plug-in computes.** The prescription is scaled to `Focal Length`; together with `Filmback Width`, this sets the field of view. The f-number sets the diaphragm, never beyond the design aperture. For each wavelength, the plug-in traces rays through the glasses of the catalogue and derives:
+- the real position of the chief ray, hence distortion and lateral colour;
+- the wavefront, fitted on 45 Zernike polynomials, hence the diffraction PSF;
+- the pupil that is really open: the lens mounts clip off-axis rays, which gives the cat's-eye bokeh and darker corners;
+- the relative illumination.
+
+**Focus.** The sensor is placed automatically at the best on-axis focus. `Focus Distance` (in metres, 0 = infinity) focuses on a close subject. `Defocus` (Aberrations tab) adds defocus.
+
+**Amounts.** `Aberration Amount`, `Distortion Amount` and `Lateral Colour Amount` exaggerate or tone down the lens.
+
+**If the image field exceeds the design field** (focal length too short for the filmback), the plug-in shows a warning. The corners are then vignetted down to black: it is the image circle of the lens.
+
+**Diaphragm.** The shape of the diaphragm (number of blades, roundness, rotation) applies to real lenses too. The settings reserved for the parametric mode are greyed out.
+
+#### `.lens` file format
+
+```
+name = My lens
+source = where the prescription comes from
+fnumber = 2.0          # design aperture
+half_field = 20        # design half field (degrees)
+surfaces
+# radius  thickness  material  [semi-diameter|auto]  [stop]  [k=conic]  [a4=.. a6=..]
+ 47.07   5.30   N-LAF32
+ 184.3   0.60   air
+ inf     8.70   air   auto stop
+-17.50   1.30   SF4@hikari
+ ...
+ inf     3.15   air    # last thickness: up to the image plane
+```
+
+- **Lines.** One line per surface, object side first. The unit is free, since the lens is rescaled to the requested focal length.
+- **Material.** `air`, a glass of the catalogue (1611 Schott, Ohara, Hoya, CDGM, Hikari and Sumita glasses; `name@vendor` when names clash), or `nd/vd` (e.g. `1.67/47.2`) for a glass given by its index and Abbe number, as in patents.
+- **Semi-diameters.** When they are missing, they are computed: full aperture up to 60 % of the field, then an aperture that shrinks towards the corner. The `unvignetted_field` and `corner_pupil` keys of `carender` control this computation.
+- **Bundled files.** The files of the `lenses/` folder are built into the plug-in, through `tools/gen_lenses_builtin.py`.
+
+### Cameras and presets
+
+**Camera sensitivities** (Spectral tab, `Camera`)
+
+The lens separates the wavelengths; the camera decides which colour each of them takes: hue of the fringes, iridescent edges of highlights. By default, the plug-in uses the human eye (CIE 1931 observer). With a camera:
+- the plate colours are taken as the camera's, brought into the working space by a 3 × 3 matrix;
+- this matrix is fitted on 190 reference colours, preserving white;
+- colours without any lens effect do not change (the round trip stays exact);
+- only the colours of the separated wavelengths change.
+
+The 52 built-in cameras come from **rawtoaces-data**, the Academy Software Foundation database (Apache-2.0 license): Canon, Nikon, Sony (including the A7S II and III), Fujifilm, Panasonic, Hasselblad, ARRI D21, etc. Current cinema cameras (ARRI Alexa, RED, Sony Venice) have no public data under a usable license.
+
+For another camera, `Custom File` reads:
+- either a text file, one line per wavelength: `nm r g b` (at least from 420 to 680 nm; space, tab, comma or semicolon separators);
+- or a JSON file in the rawtoaces-data format.
+
+Measurements (`test_render`): matrices fitted within 0.9 % of white on average, 1.4 % at worst (Fujifilm X-T4); round trip exact to 3·10⁻⁸ for the 52 cameras; on an isolated wavelength, the Sony A7S III sees a colour up to 0.42 away in chromaticity from the CIE observer.
+
+**The effect is subtle, often invisible.** On the test chart with the Vintage preset, switching from the CIE observer to the Sony A7S III changes the colour of the fringes by 0.4 % (median) and 0.8 % for the 5 % most affected pixels, below the visibility threshold (about 1 to 2 %). A fringe is not an isolated wavelength but a band of wavelengths, and the matrix of each camera is fitted to render broad-spectrum light correctly, so the differences between cameras cancel out almost entirely. The effect only becomes visible with narrow-spectrum sources: saturated LEDs, lasers, sodium lamps. This setting is about fidelity, not look.
+
+**Presets** (Lens tab, `Preset`)
+
+A preset first resets the optical settings of the Lens and Aberrations tabs, then applies its own. Everything can be changed afterwards. The filmback, the optical centre and the settings of the Spectral and Render tabs are kept.
+
+| Preset | Effect |
+|---|---|
+| Diffraction Limited f/11 | perfect lens: only the Airy disc remains |
+| Vintage (coma, astigmatism) | coma and astigmatism at the edges, lateral colour, barrel distortion, cat's eye |
+| Soft Wide Open f/1.4 | spherical aberration and spherochromatism: soft glow, purple and green fringes |
+| Diffraction Stars f/16 | 7 straight blades: 14-point stars |
+| Anamorphic Oval Bokeh | pupil twice as tall as it is wide, slight defocus |
+| Real: Double Gauss f/2, Petzval f/1.4, Cooke Triplet f/5, Wide Angle f/4, Telephoto f/5.6 | traced real lenses |
+
+For a real lens, the focal length is chosen so that the corner of the image falls at 95 % of the field the prescription was designed for, taking the filmback and the plate format into account.
+
+**Your own presets (files)**
+
+After the 10 built-in presets, the `Preset` menu adds the `.txt` files found in:
+- the plug-in's `presets` folder (`ChromaAberrations_OFX.ofx.bundle/Contents/Resources/presets`), which holds two examples. It is replaced at every reinstallation: do not put your own files there;
+- your user folder:
+  - Windows: `%APPDATA%\ChromaAberrations_OFX\presets`;
+  - Linux: `~/.config/ChromaAberrations_OFX/presets`;
+- the folders listed in the `CA_PRESET_PATH` environment variable, separated by `;` (or `:` on Linux). Handy to share presets across a studio, on a network folder.
+
+The menu is built when the plug-in loads: **restart Nuke after adding a file**.
+
+The format is the one of the `carender` files, so one file gives the same lens in both tools:
+
+```
+name = My lens               # name in the menu (otherwise: the file name)
+hint = Description shown in the menu tooltip
+lens = petzval_f14           # real lens: built-in, or a .lens file (path relative to the preset)
+fnumber = 2
+focus_distance = 2           # metres, 0 = infinity
+focal = 85                   # optional for a real lens: computed otherwise
+camera = Sony_ILCE-7SM3      # optional: otherwise the node's camera does not change
+```
+
+Recognised keys:
+- parametric lens (no `lens` key): `fnumber`, `w040`, `w131`, `w222`, `w220`, `w311`, `w020`, `axial_ca`, `lateral_ca`, `spherochromatism`, `zernike`, `focal`;
+- real lens: `lens`, `focal`, `fnumber`, `focus_distance`, `aberration_gain`, `distortion_gain`, `lateral_gain`;
+- both: `blades`, `roundness`, `rotation`, `aspect`, `vignetting`, `vignetting_start`, `natural_vignetting`, `camera`.
+
+The other `carender` keys (`kernel`, `grid_x`, `wavelengths`, `output`…) are ignored: the render settings stay those of the node. A missing key takes the `carender` default (no aberrations, f/2.8, round diaphragm). Camera names are the ones `carender … camera=list` prints.
+
+You can also keep settings with Nuke's node presets (right-click on the node → Presets). They are specific to Nuke, whereas the files also work with `carender` and other OFX hosts.
+
+### How it works
+
+The computation has two stages.
+
+**1. Lens preparation.** It only depends on the settings and the image size, so it is done once and cached. It computes:
+- the PSFs on the grid, for each wavelength, centred on the chief ray;
+- a map of the chief-ray displacement per wavelength (distortion and lateral colour);
+- a relative illumination map (cos⁴ and mechanical vignetting);
+- the RGB → spectrum conversion table.
+
+For a real lens, at most 9 wavelengths are traced, evenly spaced in 1/λ². The others are interpolated in 1/λ² (Lagrange on the 4 closest), which follows the dispersion of the glasses. On the double Gauss, 24 wavelengths computed from 9 traced ones give the chief ray within 0.003 µm and the corner PSF within 0.13 %.
+
+**2. Rendering each frame**, for each wavelength:
+- **Light of the wavelength.** Each pixel is converted to a spectrum. It is read where its chief ray comes from, which applies the inverse distortion, then multiplied by the relative illumination.
+- **Variable blur.** The light arriving at a point is spread by the PSF interpolated between the 4 neighbouring grid points. This decomposes exactly into one convolution per grid point, on a tile of 2 × 2 cells weighted by the bilinear interpolation. Each convolution is done by FFT, and the tiles are summed.
+- **Back to RGB.** The wavelengths are summed with the CIE 1931 colour matching functions, expressed in the working space. The sum is done in the Fourier domain, so only 3 inverse transforms are needed per tile.
+
+On the GPU, the transforms of a tile are batched for all wavelengths (batched cuFFT). The wavelengths are processed in packs that fit in half of the free GPU memory, so Final mode also works on 6 to 8 GB cards, even in 4K. The PSF spectra are kept on the card from one frame to the next if they fit in a quarter of the free memory. Nuke's image is copied straight into page-locked transfer memory, without an intermediate copy.
+
+Two design choices differ from the textbook methods:
+
+1. **Variable blur: exact tiles instead of basis PSFs (PCA).** A basis-PSF decomposition was written and measured: 61.7 dB with 6 basis PSFs, 71 dB with 12. But a truncated decomposition gives slightly negative PSF values: on a highlight 200 times brighter than white, that makes black dots next to the spot. The tile method reproduces the PSF interpolation exactly (167 dB, float precision), never produces negative light, and costs about the same. Quality then only depends on the grid density, which is why the grid is the Preview / Final setting: PSF error of 3.7 % in 7 × 5 and 0.7 % in 15 × 11 on the vintage test lens.
+2. **Spectrum: smoothest spectrum per colour, rather than Jakob and Hanika's method.** Each colour gets the smoothest spectrum that has exactly its RGB values and no negative light. These spectra are precomputed in a chromaticity table. The RGB → spectrum → RGB round trip is exact by construction (error 4·10⁻⁸), HDR and negative values included. Greys become flat spectra, and a saturated light becomes a narrow, positive spectrum. Same goal as Jakob and Hanika, with an exact round trip and no external table to license.
+
+### Profiling and timings
+
+Set the environment variable `CA_PROFILE=1` before starting Nuke. Each frame then writes a line to the console (Windows: start Nuke from a command prompt; Linux: the terminal), with the number of wavelengths, the grid and the PSF size; the lens preparation ("cached" when it comes from the cache), split into lens, PSFs and maps; the waiting time for the input image; the image copy; the GPU render (transfers, compute, number of packs) or CPU render; the output writing and the total. For example:
+
+```
+ChromaAberrations_OFX profile: frame 1, 1920x1080, image, 24 wavelengths, grid 7x5 (auto), PSF 13 px |
+lens plan computed 957 ms (lens 24, PSFs 874, maps 28) | pack 27.4 ms | CPU 3549.5 ms | output 21.3 ms | total 4555.3 ms
+```
+
+Measurements in Natron, 1920 × 1080, on a 2-core CPU:
+
+| Case | Lens preparation | Frame render (CPU) |
+|---|---|---|
+| Parametric, Preview (8 λ, 7 × 5, auto PSF 13 px) | 0.36 s | 1.2 s |
+| Parametric, Final (24 λ, auto grid 7 × 5) | 0.96 s | 3.5 s |
+| Real double Gauss, Final (24 λ, auto grid 15 × 23, auto PSF 13 px) | 18.4 s | 3.3 s |
+| Real double Gauss, Final, fixed grid 15 × 11, PSF 129 px | 17.7 s | 5.5 s |
+
+On an RTX 3060 Ti (before the latest transfer optimisations), a following 2K frame took 40 ms: 18.5 ms of GPU compute and 21.9 ms of transfers. `test_render` and `CA_PROFILE` print the figures for your machine.
+
+**The Final preparation of a real lens is long**: 15 to 30 s on 2 cores, about 3 to 6 s on a 12- to 16-core workstation. It only happens once per optical setting; the following frames only cost the render. Interactively, `Preview in Viewer, Final in Render` avoids waiting for it. That is why the PSFs are not computed on the GPU: it would only speed up the first Final render.
+
+### Validation
+
+`test_psf` (24 checks) checks the PSF engine: Airy disc, energy, Seidel, diffraction stars, Zernike and distortion.
+
+`test_render` (26 checks without GPU, 34 with) checks the renderer:
+
+| Test | Reference | Result |
+|---|---|---|
+| Spectral round trip (3 spaces, 3 to 32 wavelengths, 20,000 colours) | Identity | Error ≤ 4·10⁻⁸ |
+| Spectra of saturated ACEScg colours (red neon, blue LED, sodium, magenta) | No negative light | ≥ −0.8 % of the peak (a linear basis goes down to −7 %) |
+| Render with every effect off | Input image | Relative error ≤ 4·10⁻⁷ |
+| FFT tiles | Exact pixel-by-pixel convolution | 167 dB |
+| PSF between grid points | PSF computed exactly at that point | Error of 12 % (4 × 3 grid), 3.7 % (7 × 5), 0.7 % (15 × 11) |
+| Light point on a grid point | PSF of the bank | Difference 7·10⁻⁸ |
+| Energy conservation | Sum of each channel | Difference 7·10⁻⁷ |
+| Distortion and lateral colour | Chief-ray position per wavelength | 0.004 px |
+| Natural falloff and mechanical vignetting | cos⁴; intersection area of the two circles | Difference 0.0006 |
+| GPU vs CPU (with and without PSF cache, with and without blur) | CPU render | > 90 dB expected; not yet measured on an NVIDIA card |
+
+`test_lens` (20 checks) compares the ray tracing with **Optiland**, an independent ray tracer (MIT license). The reference data are in `tests/reference` and are regenerated by `make_optiland_reference.py`.
+
+| Test | Result |
+|---|---|
+| Indices of the 20 glasses used, from 400 to 700 nm | Difference < 5·10⁻⁸ |
+| Paraxial focal length of the 5 lenses | Relative difference 3·10⁻¹⁰ |
+| 60 chief rays, 3 wavelengths × 4 fields × 5 lenses | Difference 2·10⁻⁶ pixel in 2K |
+| 294 rays through the pupil | Difference 0.03 pixel in 2K |
+| Fitted wavefront: does its gradient predict the traced rays? | Within 2.3 % at worst (Petzval) |
+| Render: displacement in the corner, illumination, light conservation, PSF on axis and at the edge | Pass |
+| 24 wavelengths interpolated from 9 traced ones | Chief ray within 0.003 µm, PSF within 0.13 % |
+| Automatic PSF size | 9 px instead of 129, all the light kept |
+| Automatic grid (2 % tolerance) | 3 × 3 → 6 × 6, error 1.9 % |
+
+The double Gauss rendered in Natron by the plug-in is identical to `carender` (120 dB). Visual tests use the `pattern:chart` chart: it shows coma comets, colour fringes around HDR points and the stretching of the Siemens stars at the edge of the field well.
+
+Not tested yet: the GPU path on the latest version, and the plug-in in Nuke.
+
+### Command-line tools
+
+**`carender`: applies the lens to an image**
+
+```
+build\carender.exe my_plate.exr result.exr examples\vintage_coma.txt
+build\carender.exe my_plate.exr result.exr examples\vintage_coma.txt fnumber=2.8 wavelengths=16
+build\carender.exe pattern:chart chart.exr examples\vintage_coma.txt save_input=chart_source.exr
+```
+
+- **Images**: input and output are EXRs in linear light. The working space is ACEScg by default, otherwise `colorspace=rec709` or `colorspace=rec2020`. HDR and negative values are accepted. Alpha is copied as is, without blur.
+- **Charts**: `pattern:chart` generates a 2048 × 1152 chart with Siemens stars and a grid of white, red and blue HDR light points. `pattern:points` and `pattern:siemens` are available too, and `width=` / `height=` change the size.
+
+The lens settings are those of `psfmap` (list with `carender --help`). For a real lens: `lens=double_gauss_f2` (or a `.lens` file) with `focal=85`, `fnumber=2.8` and `focus_distance=3`. `camera=<id>` or `camera=<file>` picks a camera; `camera=list` prints the built-in ones. Additional keys:
+
+| Key | Role |
+|---|---|
+| `wavelengths=8` | Number of wavelengths between 400 and 700 nm (8 for preview, 16 to 32 for final) |
+| `grid_x=7 grid_y=5` | Grid of computed PSFs; the PSF is interpolated between these points |
+| `kernel=65` | Maximum PSF size in pixels; a warning is shown if a PSF overflows |
+| `focal=35`, `natural_vignetting=1` | Focal length (mm) for the natural cos⁴ falloff, and its amount (0 to 1) |
+| `vignetting=0`, `vignetting_start=0.5` | Mechanical vignetting (cat's-eye pupil): depth of the cut in the corner, and where in the field it starts |
+| `blur=1 distortion=1 vignette=1` | Each effect can be turned off (0) |
+| `device=auto\|cpu\|gpu` | Where to compute |
+| `compare=1` | Computes on GPU and CPU and prints the difference |
+| `exact=1` | Also computes the exact pixel-by-pixel convolution and prints the PSNR. Slow: for small images only. |
+
+`carender` prints the lens preparation time and the render time. On the GPU, it also prints the time of a following frame, which is the real per-frame cost in the plug-in, since the PSF spectra then stay on the card.
+
+**`psfmap`: shows the PSFs**
+
+```
+cd examples
+..\build\psfmap.exe vintage_coma.txt
+```
+
+`psfmap` writes one cell per grid point, the centre of the image in the middle, plus a CSV report (method, energy, EE80, centroid, displacement). `psfmap --help` lists the keys. The `examples/` folder holds five example lenses (`perfect`, `vintage_coma`, `spherical_f14`, `diaphragm_star`, `anamorphic`) usable by both tools.
+
+**Lens keys** (also used by presets). The coefficients are in **waves** (at `lambda0` = 550 nm), at the edge of the pupil and in the corner of the image:
+
+| Key | Aberration | Visible effect |
+|---|---|---|
+| `w040` | Spherical | Soft glow around highlights |
+| `w131` | Coma | Comet-shaped spots towards the edges. Positive: tail towards the centre; negative: outwards. |
+| `w222` | Astigmatism | Spots stretched radially or tangentially towards the edges |
+| `w220` | Field curvature | Blur increasing towards the edges |
+| `w311` | Distortion | Negative: barrel; positive: pincushion |
+| `w020` | Defocus | Uniform blur that reveals the shape of the diaphragm |
+| `axial_ca` | Axial colour | Purple or green fringes around sharp areas |
+| `lateral_ca` | Lateral colour | Radial colour fringes towards the edges |
+| `spherochromatism` | Spherical aberration varying with wavelength | Coloured glow |
+| `zernike=j:c,...` | Zernike terms (Noll index ≥ 4, in waves RMS) | Free or measured aberrations |
+
+- **Diaphragm**: `blades` (number of blades, 0 = round), `roundness` (0 for straight blades, 1 for a round diaphragm), `rotation` (degrees), `aspect` (pupil height / width, 2 = 2× anamorphic), `vignetting` (mechanical vignetting).
+- **Sensor**: `filmback` (width covered by the image in mm, 24.89 = Super 35), `center_x`, `center_y` (optical centre).
+
+### Building notes
+
+ChromaAberrations_OFX builds like the other plug-ins (see [Building](#building)), with a few differences:
+
+- `build.bat` and `build.sh` build the plug-in, `psfmap` and `carender`, then run `test_psf`, `test_render` and `test_lens`. On a machine with an NVIDIA card, `test_render` compares the GPU with the CPU and prints the 2K timings. When `build.bat` is run as administrator, it offers to install the bundle into the OFX folder.
+- CMake options: `CA_WITH_CUDA` (`ON`), `CA_BUILD_PLUGIN` (`ON`; turn it off to build only the tools and tests, without downloading the OpenFX headers), `CMAKE_CUDA_ARCHITECTURES` (default `"75-real;86-real;89-real;75-virtual"`; the build scripts add the installed GPU if it is newer), `OFX_DIR` for a local OpenFX checkout.
+- **cuFFT**: on Windows, the cuFFT DLL (`cufft64_*.dll`) is shipped in the bundle, next to the `.ofx`, and the plug-in loads it from its own folder; without it, or without a GPU, it runs on the CPU. On Linux, cuFFT is linked statically.
+- The node is in the **Filter** menu.
+
+### Files
+
+```
+src/core/      engine: spectrum, diaphragm, wavefront, PSF, PSF bank, RGB <-> spectrum, lens plan, CPU renderer
+src/lens/      real lenses: glass catalogue, .lens files, ray tracing, wavefront
+src/cuda/      CUDA renderer (cuFFT)
+src/ofx/       OpenFX plug-in
+lenses/        the 5 prescriptions built into the plug-in (.lens format)
+presets/       example preset files, copied into the bundle
+examples/      5 example lenses for psfmap and carender
+tools/         psfmap, carender and the generators of the built-in data
+tests/         test_psf, test_render, test_lens (Optiland references in tests/reference)
+third_party/   pocketfft (CPU FFT), tinyexr + miniz (EXR files), rawtoaces-data license
+```
+
+A real anamorphic lens prescription is still missing (no usable public prescription found yet); anamorphic plates are handled with the parametric oval pupil.
+
+---
+
 ## Performance
 
 Render time per frame, CPU vs GPU, measured with `ofx_bench` (best of 5 runs). GPU times include the host ↔ GPU transfers, as in Nuke. CPU and GPU renders are identical in every test (differences below 1e-5 of the pixel values).
@@ -617,10 +983,10 @@ The GPU is 1.5 to 14 times faster than the CPU on workstation A, and 2.3 to 17 t
 | GPU (optional) | NVIDIA GPU + [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) 12.x or 13.x | NVIDIA driver 580+ and CUDA Toolkit 13 (NVIDIA repository for Ubuntu 24.04) | not available (CPU only) |
 
 Notes:
-- The OpenFX SDK (`OFX_Release_1.5.1`) is downloaded automatically from GitHub during the first configuration, which is why Git is required. CornerPinEx_OFX downloads Natron's OFX headers and support library instead.
+- The OpenFX SDK (`OFX_Release_1.5.1`) is downloaded automatically from GitHub during the first configuration, which is why Git is required. CornerPinEx_OFX and ChromaAberrations_OFX download Natron's OFX headers and support library instead.
 - Visual Studio 2026 needs CUDA Toolkit 13.x. The Nsight warnings shown by the CUDA installer about Visual Studio integration can be ignored.
 - **Nuke versions**: tested with Nuke 14 and Nuke 17 on Windows; one build works for all versions. Nuke 14 and older ship their own, older Microsoft C++ runtime (`msvcp140.dll`), which plug-ins built with Visual Studio 2022 17.10 or newer would crash with. The CMake projects define `_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR` on Windows so that the plug-ins work with every Nuke version.
-- The CUDA runtime is linked statically: the plug-ins only need a recent NVIDIA driver on the machine that runs Nuke, no CUDA DLL to ship.
+- The CUDA runtime is linked statically: the plug-ins only need a recent NVIDIA driver on the machine that runs Nuke, no CUDA DLL to ship (except the cuFFT DLL of ChromaAberrations_OFX on Windows, copied into its bundle).
 - On Linux, the C++ runtime is linked statically too: the plug-ins only depend on glibc 2.38 or newer and, for push_IT_OFX, apGlow_OFX and despill_IT_OFX, on `libGL.so.1` (viewer overlays), which every machine running Nuke has.
 - Supported GPUs by default: Turing (RTX 20xx), Ampere (RTX 30xx), Ada (RTX 40xx), and Blackwell (RTX 50xx) with CUDA 12.8+, plus PTX for newer cards. For a Pascal card (GTX 10xx), use CUDA 12 and add `61-real` to the architectures (see the CMake options below).
 
@@ -676,12 +1042,12 @@ cmake --build build --config Release --parallel
 
 | Option | Default | Effect |
 |---|---|---|
-| `PUSHIT_WITH_CUDA` / `APGLOW_WITH_CUDA` / `LDESPILL_WITH_CUDA` / `DESPILLIT_WITH_CUDA` / `CORNERPINEX_OFX_WITH_CUDA` | `ON` | Build the CUDA back-end (if a CUDA compiler is found). |
+| `PUSHIT_WITH_CUDA` / `APGLOW_WITH_CUDA` / `LDESPILL_WITH_CUDA` / `DESPILLIT_WITH_CUDA` / `CORNERPINEX_OFX_WITH_CUDA` / `CA_WITH_CUDA` | `ON` | Build the CUDA back-end (if a CUDA compiler is found). |
 | `PUSHIT_CUDA_ARCHS` / `APGLOW_CUDA_ARCHS` / `LDESPILL_CUDA_ARCHS` / `DESPILLIT_CUDA_ARCHS` | empty (automatic) | GPU architectures, e.g. `"75-real;86-real"`. |
 | `APGLOW_AVX2` | `OFF` | AVX2 / FMA on the CPU, about 15 % faster. The plug-in will **not load** on a CPU without AVX2 (before Intel Haswell / AMD Ryzen). |
 | `OPENFX_ROOT` | empty | Use a local OpenFX SDK checkout instead of downloading it. |
 
-CornerPinEx_OFX uses `CMAKE_CUDA_ARCHITECTURES`, `OFX_DIR` and `SUPPORTEXT_DIR` instead (see [its section](#building-and-checking-the-installation)).
+CornerPinEx_OFX and ChromaAberrations_OFX use `CMAKE_CUDA_ARCHITECTURES` and `OFX_DIR` (plus `SUPPORTEXT_DIR` for CornerPinEx_OFX) instead (see [CornerPinEx_OFX](#building-and-checking-the-installation) and [ChromaAberrations_OFX](#building-notes)).
 
 ---
 
@@ -697,7 +1063,7 @@ Copy the `.ofx.bundle` folder into the OFX plug-in folder of your system:
 
 You can also put the bundles in any folder and add that folder to the `OFX_PLUGIN_PATH` environment variable.
 
-The nodes appear in the **Filter** menu (push_IT_OFX, apGlow_OFX), the **Keyer** menu (L_Despill_OFX, despill_IT_OFX) and the **Transform** menu (CornerPinEx_OFX), or with Tab.
+The nodes appear in the **Filter** menu (push_IT_OFX, apGlow_OFX, ChromaAberrations_OFX), the **Keyer** menu (L_Despill_OFX, despill_IT_OFX) and the **Transform** menu (CornerPinEx_OFX), or with Tab.
 
 **After an installation or an update, clear Nuke's OFX cache** (close Nuke first). Otherwise Nuke may keep showing the old version or not show the node at all:
 - Windows: delete `%LOCALAPPDATA%\Temp\nuke\ofxplugincache`
@@ -740,4 +1106,5 @@ The benchmark contains a copy of the plug-in sources (`ofx_bench/src/push_it`, `
 - push_IT_OFX is inspired by the *Pixel Spread* effect of Autodesk Flame.
 - L_Despill_OFX is based on the **L_Despill v05** gizmo by Justin Johnson (Luma Pictures) and the **DespillMadness** gizmo.
 - CornerPinEx_OFX is derived from **Natron's CornerPin** ([openfx-misc](https://github.com/NatronGitHub/openfx-misc) and [openfx-supportext](https://github.com/NatronGitHub/openfx-supportext), © INRIA and The Natron Developers, GPL v2+).
+- ChromaAberrations_OFX uses pocketfft (BSD 3-Clause), tinyexr and miniz (BSD 3-Clause / MIT), the camera sensitivities of rawtoaces-data (Academy Software Foundation, Apache-2.0), the glass data of [refractiveindex.info](https://github.com/polyanskiy/refractiveindex.info-database) (CC0), lens prescriptions from M. Laikin's *Lens Design* and US patent 8,879,901 as published in [Optiland](https://github.com/HarrisonKramer/optiland) (MIT), which also provides the ray-tracing reference data.
 - Built on the [OpenFX](https://github.com/AcademySoftwareFoundation/openfx) SDK.

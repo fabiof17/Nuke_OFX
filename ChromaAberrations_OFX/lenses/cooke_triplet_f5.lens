@@ -1,0 +1,12 @@
+# ChromaAberrations_OFX lens file
+name = Cooke triplet f/5
+source = Cooke triplet example prescription as published in the Optiland samples (MIT licence)
+fnumber = 5.0
+half_field = 20
+surfaces
+ 22.01359    3.25896   SK16@hikari
+-435.76044   6.00755   air
+-22.21328    0.99997   F2
+ 20.29192    4.75041   air   auto stop
+ 79.68360    2.95208   SK16@hikari
+-18.39533    42.20778  air

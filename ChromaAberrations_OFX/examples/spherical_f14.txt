@@ -1,0 +1,12 @@
+# Wide open at f/1.4 with spherical aberration and spherochromatism: soft glow, purple / green fringes.
+fnumber = 1.4
+w040 = 6
+w020 = -6          # focus on the circle of least confusion
+spherochromatism = 1.5
+axial_ca = 1.5
+kernel = 65
+grid_x = 5
+grid_y = 3
+wavelengths = 10
+output = spherical_f14.exr
+report = spherical_f14.csv

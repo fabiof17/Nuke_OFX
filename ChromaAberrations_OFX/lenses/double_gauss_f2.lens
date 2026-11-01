@@ -1,0 +1,33 @@
+# ChromaAberrations_OFX lens file
+name = Double Gauss f/2 (modern Planar type)
+source = U.S. Patent 8,879,901, prescription as published in the Optiland samples (MIT licence)
+fnumber = 2.0          # design f-number (image space)
+half_field = 10.82     # design half field of view (degrees)
+reference_focal = auto # computed from the prescription; the lens is scaled to the focal length asked
+#
+# radius (mm, inf = flat)  thickness to the next surface (mm)  material after the surface  [semi-diameter | auto]  [stop]
+surfaces
+ 47.07125235     5.29811826   N-LAF32
+ 184.28171667    0.6          air
+ 29.92177645     7.13654863   H-ZLAF52A
+ 50.4992638      2.0          air
+ 60.5004845      0.99941671   E-SF1
+ 17.72638376     9.9          air
+ inf             8.7          air        auto  stop
+-17.49862241     1.29934579   SF4@hikari
+ 1000.00000019   8.44325264   M-TAF1
+-28.00122422     0.1          air
+-141.99976777    6.79950254   M-TAF1
+-35.94103045     0.516        air
+ 92.00034667     3.29901361   Q-LAFPH1S
+-277.85210888    2.13         air
+-157.24588662    1.29980422   S-FSL5
+ 740.47397742    0.25         air
+ 19.91929498     5.59345688   J-LASF015
+ 36.48852623     0.574        air
+ 45.97532235     1.00045731   E-SF1
+ 16.39521847     2.951        air
+ 33.86131631     3.22444231   H-LAK52
+ inf             8.0          air
+ inf             4.0          H-LAK52    # filter / cover glass block
+ inf             3.15317838   air        # last thickness: to the image plane

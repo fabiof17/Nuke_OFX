@@ -1,0 +1,14 @@
+# 2x anamorphic lens (oval pupil twice as tall as it is wide), slightly out of focus:
+# vertical oval bokeh, astigmatism at the edges of the field, axial colour.
+fnumber = 2.8
+aspect = 2           # pupil height / width
+w020 = 6             # defocus: reveals the shape of the pupil
+w222 = 3
+w040 = 1
+axial_ca = 2
+kernel = 65
+grid_x = 5
+grid_y = 3
+wavelengths = 8
+output = anamorphic.exr
+report = anamorphic.csv

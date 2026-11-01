@@ -1,0 +1,15 @@
+# ChromaAberrations_OFX lens file
+name = Telephoto f/5.6
+source = M. Laikin, Lens Design, 4th ed., CRC Press 2007, p. 91; prescription as published in the Optiland samples (MIT licence)
+fnumber = 5.6
+half_field = 10
+surfaces
+ 0.8589    0.2391   N-BK7
+-2.6902    0.09     N-BASF2
+ 3.0318    0.0481   air
+ inf       1.0347   air   auto stop
+-0.5715    0.09     N-ZK7
+-0.7423    0.1005   N-LAF33
+-1.1433    0.0156   air
+-17.0388   0.0793   SF1
+-2.7695    2.4796   air

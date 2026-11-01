@@ -1,0 +1,11 @@
+# Diaphragm stopped down with 7 straight blades: 14-point diffraction stars.
+fnumber = 16
+blades = 7
+roundness = 0
+rotation = 10
+kernel = 65
+grid_x = 3
+grid_y = 3
+wavelengths = 10
+output = diaphragm_star.exr
+report = diaphragm_star.csv
